@@ -916,6 +916,55 @@ add_size:
 		UT_LIST_ADD_FIRST(fil_system->LRU, node);
 	}
 
+/*kyong - tablespace*/
+	if (strcmp(node->name, "./tpcc/customer.ibd") == 0) {
+		srv_cust_space_id = space->id;
+		fprintf(stderr, "setting %s to %lu\n", node->name, srv_cust_space_id);
+	}
+
+	if (strcmp(node->name, "./tpcc/district.ibd") == 0) {
+		srv_dist_space_id = space->id;
+		fprintf(stderr, "setting %s to %lu\n", node->name, srv_dist_space_id);
+	}
+
+  if (strcmp(node->name, "./tpcc/history.ibd") == 0) {
+		srv_his_space_id = space->id;
+		fprintf(stderr, "setting %s to %lu\n", node->name, srv_his_space_id);
+	}
+
+  if (strcmp(node->name, "./tpcc/item.ibd") == 0) {
+		srv_itm_space_id = space->id;
+		fprintf(stderr, "setting %s to %lu\n", node->name, srv_itm_space_id);
+	}
+
+  if (strcmp(node->name, "./tpcc/new_orders.ibd") == 0) {
+		srv_no_space_id = space->id;
+		fprintf(stderr, "setting %s to %lu\n", node->name, srv_no_space_id);
+	}
+
+  if (strcmp(node->name, "./tpcc/order_line.ibd") == 0) {
+		srv_ol_space_id = space->id;
+		fprintf(stderr, "setting %s to %lu\n", node->name, srv_ol_space_id);
+	}
+
+  if (strcmp(node->name, "./tpcc/orders.ibd") == 0) {
+		srv_or_space_id = space->id;
+		fprintf(stderr, "setting %s to %lu\n", node->name, srv_or_space_id);
+	}
+
+  if (strcmp(node->name, "./tpcc/stock.ibd") == 0) {
+		srv_stk_space_id = space->id;
+		fprintf(stderr, "setting %s to %lu\n", node->name, srv_stk_space_id);
+	}
+
+	if (strcmp(node->name, "./tpcc/warehouse.ibd") == 0) {
+		srv_wh_space_id = space->id;
+		fprintf(stderr, "setting %s to %lu\n", node->name, srv_wh_space_id);
+	}
+
+	fprintf(stderr, "%s: %lu\n", node->name, space->id);
+  /**/
+
 	return(true);
 }
 
@@ -6440,7 +6489,8 @@ fil_iterate(
 		os_offset_t	page_off = offset;
 		ulint		n_pages_read = (ulint) n_bytes / iter.page_size;
 
-		for (ulint i = 0; i < n_pages_read; ++i) {
+		for (ulint i = 0; i < n_pages_read; ++i) { 
+
 
 			buf_block_set_file_page(
 				block, page_id_t(space_id, page_no++));

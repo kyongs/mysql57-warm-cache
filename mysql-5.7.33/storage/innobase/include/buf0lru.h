@@ -186,12 +186,28 @@ void
 buf_LRU_make_block_young(
 /*=====================*/
 	buf_page_t*	bpage);	/*!< in: control block */
+	
 /******************************************************************//**
 Moves a block to the end of the LRU list. */
 void
 buf_LRU_make_block_old(
 /*===================*/
 	buf_page_t*	bpage);	/*!< in: control block */
+
+#ifdef UNIV_WARM_BUF_CACHE
+/**********************************************************************//**
+Updates buf_pool->LRU_old_ratio.
+@return updated old_pct */
+uint
+warm_buf_LRU_old_ratio_update(
+/*=====================*/
+	uint	old_pct,/*!< in: Reserve this percentage of
+			the buffer pool for "old" blocks. */
+	ibool	adjust);/*!< in: TRUE=adjust the LRU list;
+			FALSE=just assign buf_pool->LRU_old_ratio
+			during the initialization of InnoDB */
+#endif /* UNIV_WARM_BUF_CACHE */
+
 /**********************************************************************//**
 Updates buf_pool->LRU_old_ratio.
 @return updated old_pct */

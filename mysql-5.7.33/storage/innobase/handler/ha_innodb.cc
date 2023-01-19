@@ -20302,6 +20302,26 @@ static MYSQL_SYSVAR_BOOL(sync_debug, srv_sync_debug,
   NULL, NULL, FALSE);
 #endif /* UNIV_DEBUG */
 
+#ifdef UNIV_WARM_BUF_CACHE
+static MYSQL_SYSVAR_BOOL(use_warm_buffer, srv_use_warm_buf,
+  PLUGIN_VAR_NOCMDARG | PLUGIN_VAR_READONLY,
+  "Enable WARM buffer (disabled by default).",
+  NULL, NULL, FALSE);
+
+static MYSQL_SYSVAR_ULONG(warm_buffer_pool_size, srv_warm_buf_pool_size,
+  PLUGIN_VAR_OPCMDARG | PLUGIN_VAR_READONLY,
+  "The size of the memory buffer InnoDB uses to "
+  "cache data on WARM buffer", NULL, NULL,
+  1024 * 1024 * 1024L, 1024 * 1024L,
+  UINT_MAX32, 0);
+
+static MYSQL_SYSVAR_ULONG(warm_buffer_pool_instances, srv_warm_buf_pool_instances,
+  PLUGIN_VAR_OPCMDARG | PLUGIN_VAR_READONLY,
+  "Number of buffer pool instances for WARM buffer",
+  NULL, NULL, 1, 1, 8, 0);
+
+#endif /* UNIV_WARM_BUF_CACHE */
+
 static struct st_mysql_sys_var* innobase_system_variables[]= {
   MYSQL_SYSVAR(api_trx_level),
   MYSQL_SYSVAR(api_bk_commit_interval),
@@ -20462,6 +20482,11 @@ static struct st_mysql_sys_var* innobase_system_variables[]= {
   MYSQL_SYSVAR(compression_failure_threshold_pct),
   MYSQL_SYSVAR(compression_pad_pct_max),
   MYSQL_SYSVAR(default_row_format),
+#ifdef UNIV_WARM_BUF_CACHE
+  MYSQL_SYSVAR(use_warm_buffer),
+  MYSQL_SYSVAR(warm_buffer_pool_size),
+  MYSQL_SYSVAR(warm_buffer_pool_instances),
+#endif /* UNIV_WARM_BUF_CACHE */
 #ifdef UNIV_DEBUG
   MYSQL_SYSVAR(trx_rseg_n_slots_debug),
   MYSQL_SYSVAR(limit_optimistic_insert_debug),
@@ -20475,6 +20500,7 @@ static struct st_mysql_sys_var* innobase_system_variables[]= {
   MYSQL_SYSVAR(master_thread_disabled_debug),
   MYSQL_SYSVAR(sync_debug),
 #endif /* UNIV_DEBUG */
+
   NULL
 };
 

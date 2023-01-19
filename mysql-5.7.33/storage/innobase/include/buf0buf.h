@@ -99,6 +99,11 @@ struct fil_addr_t;
 extern	buf_pool_t*	buf_pool_ptr;	/*!< The buffer pools
 					of the database */
 
+#ifdef UNIV_WARM_BUF_CACHE
+extern buf_pool_t *warm_buf_pool_ptr; /*!< The WARM buffer pools
+                    of the database */
+#endif /* UNIV_WARM_BUF_CACHE */
+
 #ifdef UNIV_DEBUG
 extern my_bool	buf_disable_resize_buffer_pool_debug; /*!< if TRUE, resizing
 					buffer pool is not allowed. */
@@ -356,6 +361,28 @@ void
 buf_pool_mutex_exit_all(void);
 /*==========================*/
 
+#ifdef UNIV_WARM_BUF_CACHE
+/********************************************************************//**
+Creates the WARM buffer pool.
+@return DB_SUCCESS if success, DB_ERROR if not enough memory or error */
+dberr_t
+warm_buf_pool_init(
+/*=========*/
+	ulint	size,		/*!< in: Size of the total pool in bytes */
+	ulint	n_instances);	/*!< in: Number of instances */
+
+/********************************************************************//**
+Frees the WARM buffer pool at shutdown.  This must not be invoked before
+freeing all mutexes. */
+void
+warm_buf_pool_free(
+/*==========*/
+	ulint	n_instances);	/*!< in: numbere of instances to free */
+
+/** Checks whether this page should be moved to the WARM buffer. */
+bool buf_block_will_be_moved_to_warm_buf(const page_id_t& page_id);
+#endif /* UNIV_WARM_BUF_CACHE */
+
 /********************************************************************//**
 Creates the buffer pool.
 @return DB_SUCCESS if success, DB_ERROR if not enough memory or error */
@@ -434,6 +461,9 @@ zero if all modified pages have been flushed to disk.
 lsn_t
 buf_pool_get_oldest_modification(void);
 /*==================================*/
+#ifdef UNIV_WARM_BUF_CACHE
+lsn_t warm_buf_pool_get_oldest_modification(void);
+#endif /*UNIV_WARM_BUF_CACHE*/
 
 /********************************************************************//**
 Allocates a buf_page_t descriptor. This function must succeed. In case
@@ -936,6 +966,14 @@ Returns the number of pending buf pool read ios.
 @return number of pending read I/O operations */
 ulint
 buf_get_n_pending_read_ios(void);
+
+#ifdef UNIV_WARM_BUF_CACHE
+/************************************
+Returns the number of pending warm buf pool read ios.
+@return number of pending read I/O operations */
+ulint
+warm_buf_get_n_pending_read_ios(void);
+#endif /*UNIV_WARM_BUF_CACHE*/
 /*============================*/
 /*********************************************************************//**
 Prints info of the buffer i/o. */
@@ -1674,6 +1712,14 @@ public:
 					or buf_block_t::mutex. */
 # endif /* UNIV_DEBUG */
 #endif /* !UNIV_HOTBACKUP */
+#ifdef UNIV_WARM_BUF_CACHE
+    bool cached_in_warm_buf; /*!< TRUE if the page is cached
+                             in the WARM buffer */
+    bool moved_to_warm_buf;  /*!< TRUE if the page needs to
+                             be moved to the WARM buffer */
+	// ib_uint32_t updated_count; 
+	// unsigned	read_cnt;
+#endif /* UNIV_WARM_BUF_CACHE */
 };
 
 /** The buffer control block structure */

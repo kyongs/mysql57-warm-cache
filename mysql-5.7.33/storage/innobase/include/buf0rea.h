@@ -162,6 +162,11 @@ invoked */
 #define BUF_READ_IBUF_PAGES_ONLY	131
 /** read any page */
 #define BUF_READ_ANY_PAGE		132
+
+#ifdef UNIV_WARM_BUF_CACHE
+/** move the target page to WARM buffer */
+#define BUF_MOVE_TO_WARM_BUF 133
+#endif /* UNIV_WARM_BUF_CACHE */
 /* @} */
 
 #endif

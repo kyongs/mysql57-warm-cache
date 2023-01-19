@@ -83,6 +83,10 @@ Created 11/5/1995 Heikki Tuuri
 
 my_bool  srv_numa_interleave = FALSE;
 
+#ifdef UNIV_WARM_BUF_CACHE
+buf_pool_t *warm_buf_pool_ptr;
+#endif /* UNIV_WARM_BUF_CACHE */
+
 #ifdef HAVE_LIBNUMA
 #include <numa.h>
 #include <numaif.h>
@@ -451,6 +455,62 @@ buf_pool_get_oldest_modification(void)
 	return(oldest_lsn);
 }
 
+#ifdef UNIV_WARM_BUF_CACHE
+/********************************************************************//**
+Gets the smallest oldest_modification lsn for any page in the pool. Returns
+zero if all modified pages have been flushed to disk.
+@return oldest modification in pool, zero if none */
+lsn_t
+warm_buf_pool_get_oldest_modification(void)
+/*==================================*/
+{
+	lsn_t		lsn = 0;
+	lsn_t		oldest_lsn = 0;
+
+	/* When we traverse all the flush lists we don't want another
+	thread to add a dirty page to any flush list. */
+	log_flush_order_mutex_enter();
+
+	for (ulint i = 0; i < srv_warm_buf_pool_instances; i++) {
+		buf_pool_t*	buf_pool;
+
+		buf_pool = buf_pool_from_array(srv_buf_pool_instances + i);
+
+		buf_flush_list_mutex_enter(buf_pool);
+
+		buf_page_t*	bpage;
+
+		/* We don't let log-checkpoint halt because pages from system
+		temporary are not yet flushed to the disk. Anyway, object
+		residing in system temporary doesn't generate REDO logging. */
+		for (bpage = UT_LIST_GET_LAST(buf_pool->flush_list);
+		     bpage != NULL
+			&& fsp_is_system_temporary(bpage->id.space());
+		     bpage = UT_LIST_GET_PREV(list, bpage)) {
+			/* Do nothing. */
+		}
+
+		if (bpage != NULL) {
+			ut_ad(bpage->in_flush_list);
+			lsn = bpage->oldest_modification;
+		}
+
+		buf_flush_list_mutex_exit(buf_pool);
+
+		if (!oldest_lsn || oldest_lsn > lsn) {
+			oldest_lsn = lsn;
+		}
+	}
+
+	log_flush_order_mutex_exit();
+
+	/* The returned answer may be out of date: the flush_list can
+	change after the mutex has been released. */
+
+	return(oldest_lsn);
+}
+#endif /*UNIV_WARM_BUF_CACHE*/
+
 /********************************************************************//**
 Get total buffer pool statistics. */
 void
@@ -793,7 +853,7 @@ buf_page_is_corrupted(
 		return(TRUE);
 	}
 
-#if !defined(UNIV_HOTBACKUP) && !defined(UNIV_INNOCHECKSUM)
+#if !defined(UNIV_HOTBACKUP) && !defined(UNIV_INNOCHECKSUM) && !defined(UNIV_WARM_BUF_CACHE)
 	if (check_lsn && recv_lsn_checks_on) {
 		lsn_t		current_lsn;
 		const lsn_t	page_lsn
@@ -823,7 +883,7 @@ buf_page_is_corrupted(
 
 		}
 	}
-#endif /* !UNIV_HOTBACKUP && !UNIV_INNOCHECKSUM */
+#endif /* !UNIV_HOTBACKUP && !UNIV_INNOCHECKSUM && UNIV_WARM_BUF_CACHE*/
 
 	/* Check whether the checksum fields have correct values */
 
@@ -1860,6 +1920,194 @@ buf_pool_init_instance(
 	return(DB_SUCCESS);
 }
 
+#ifdef UNIV_WARM_BUF_CACHE
+/********************************************************************//**
+Initialize a buffer pool instance.
+@return DB_SUCCESS if all goes well. */
+ulint
+warm_buf_pool_init_instance(
+/*===================*/
+	buf_pool_t*	buf_pool,	/*!< in: buffer pool instance */
+	ulint		buf_pool_size,	/*!< in: size in bytes */
+	ulint		instance_no)	/*!< in: id of the instance */
+{
+	ulint		i;
+	ulint		chunk_size;
+	buf_chunk_t*	chunk;
+
+	ut_ad(buf_pool_size % srv_buf_pool_chunk_unit == 0);
+
+	/* 1. Initialize general fields
+	------------------------------- */
+	mutex_create(LATCH_ID_BUF_POOL, &buf_pool->mutex);
+
+	mutex_create(LATCH_ID_BUF_POOL_ZIP, &buf_pool->zip_mutex);
+
+	new(&buf_pool->allocator)
+		ut_allocator<unsigned char>(mem_key_buf_buf_pool);
+
+	buf_pool_mutex_enter(buf_pool);
+
+	if (buf_pool_size > 0) {
+		buf_pool->n_chunks
+			= buf_pool_size / srv_buf_pool_chunk_unit;
+		chunk_size = srv_buf_pool_chunk_unit;
+
+		buf_pool->chunks =
+			reinterpret_cast<buf_chunk_t*>(ut_zalloc_nokey(
+				buf_pool->n_chunks * sizeof(*chunk)));
+		buf_pool->chunks_old = NULL;
+
+		UT_LIST_INIT(buf_pool->LRU, &buf_page_t::LRU);
+		UT_LIST_INIT(buf_pool->free, &buf_page_t::list);
+		UT_LIST_INIT(buf_pool->withdraw, &buf_page_t::list);
+		buf_pool->withdraw_target = 0;
+		UT_LIST_INIT(buf_pool->flush_list, &buf_page_t::list);
+		UT_LIST_INIT(buf_pool->unzip_LRU, &buf_block_t::unzip_LRU);
+
+#if defined UNIV_DEBUG || defined UNIV_BUF_DEBUG
+		UT_LIST_INIT(buf_pool->zip_clean, &buf_page_t::list);
+#endif /* UNIV_DEBUG || UNIV_BUF_DEBUG */
+
+		for (i = 0; i < UT_ARR_SIZE(buf_pool->zip_free); ++i) {
+			UT_LIST_INIT(
+				buf_pool->zip_free[i], &buf_buddy_free_t::list);
+		}
+
+		buf_pool->curr_size = 0;
+		chunk = buf_pool->chunks;
+
+		do {
+				if(!buf_chunk_init(buf_pool, chunk, chunk_size)) {
+				while (--chunk >= buf_pool->chunks) {
+					buf_block_t*	block = chunk->blocks;
+
+					for (i = chunk->size; i--; block++) {
+						mutex_free(&block->mutex);
+						rw_lock_free(&block->lock);
+
+						ut_d(rw_lock_free(
+							&block->debug_latch));
+					}
+			
+					buf_pool->allocator.deallocate_large(
+						chunk->mem, &chunk->mem_pfx);
+				}
+				ut_free(buf_pool->chunks);
+				buf_pool_mutex_exit(buf_pool);
+
+				return(DB_ERROR);
+			}
+
+			buf_pool->curr_size += chunk->size;
+		} while (++chunk < buf_pool->chunks + buf_pool->n_chunks);
+
+		buf_pool->instance_no = instance_no;
+		buf_pool->read_ahead_area =
+			ut_min(BUF_READ_AHEAD_PAGES,
+			       ut_2_power_up(buf_pool->curr_size /
+					     BUF_READ_AHEAD_PORTION));
+		buf_pool->curr_pool_size = buf_pool->curr_size * UNIV_PAGE_SIZE;
+
+		buf_pool->old_size = buf_pool->curr_size;
+		buf_pool->n_chunks_new = buf_pool->n_chunks;
+        
+        /* Number of locks protecting page_hash must be a
+		power of two */
+		srv_n_page_hash_locks = static_cast<ulong>(
+			 ut_2_power_up(srv_n_page_hash_locks));
+		ut_a(srv_n_page_hash_locks != 0);
+		ut_a(srv_n_page_hash_locks <= MAX_PAGE_HASH_LOCKS);
+
+		buf_pool->page_hash = ib_create(
+			2 * buf_pool->curr_size,
+			LATCH_ID_HASH_TABLE_RW_LOCK,
+			srv_n_page_hash_locks, MEM_HEAP_FOR_PAGE_HASH);
+
+		buf_pool->page_hash_old = NULL;
+
+		buf_pool->zip_hash = hash_create(2 * buf_pool->curr_size);
+
+		buf_pool->last_printout_time = ut_time();
+	}
+	/* 2. Initialize flushing fields
+	-------------------------------- */
+
+	mutex_create(LATCH_ID_FLUSH_LIST, &buf_pool->flush_list_mutex);
+
+	for (i = BUF_FLUSH_LRU; i < BUF_FLUSH_N_TYPES; i++) {
+		buf_pool->no_flush[i] = os_event_create(0);
+	}
+
+	buf_pool->watch = (buf_page_t*) ut_zalloc_nokey(
+		sizeof(*buf_pool->watch) * BUF_POOL_WATCH_SIZE);
+	for (i = 0; i < BUF_POOL_WATCH_SIZE; i++) {
+		buf_pool->watch[i].buf_pool_index = buf_pool->instance_no;
+	}
+
+	/* All fields are initialized by ut_zalloc_nokey(). */
+
+	buf_pool->try_LRU_scan = TRUE;
+
+	/* Initialize the hazard pointer for flush_list batches */
+	new(&buf_pool->flush_hp)
+		FlushHp(buf_pool, &buf_pool->flush_list_mutex);
+
+	/* Initialize the hazard pointer for LRU batches */
+	new(&buf_pool->lru_hp) LRUHp(buf_pool, &buf_pool->mutex);
+
+	/* Initialize the iterator for LRU scan search */
+	new(&buf_pool->lru_scan_itr) LRUItr(buf_pool, &buf_pool->mutex);
+
+	/* Initialize the iterator for single page scan search */
+	new(&buf_pool->single_scan_itr) LRUItr(buf_pool, &buf_pool->mutex);
+
+	buf_pool_mutex_exit(buf_pool);
+
+    // warm_buf_pc_threshold = (buf_pool_size / srv_page_size * srv_warm_buf_pc_threshold_pct) / 100;
+    // WARM_BUF_DEBUG_PRINT("WARM buffer pool %lu is created with %lu capacity (%lu) and wakeup threshold %lu\n",
+    //     buf_pool->instance_no, buf_pool->curr_pool_size, buf_pool->curr_size, warm_buf_pc_threshold);
+
+	return(DB_SUCCESS);
+}
+
+/********************************************************************//**
+Creates the WARM buffer pool.
+@return DB_SUCCESS if success, DB_ERROR if not enough memory or error */
+dberr_t
+warm_buf_pool_init(
+/*==========*/
+	ulint	total_size,	/*!< in: size of the total pool in bytes */
+	ulint	n_instances)	/*!< in: number of instances */
+{
+	ulint		i;
+	const ulint	size	= total_size / n_instances;
+
+	ut_ad(n_instances > 0);
+	ut_ad(n_instances <= MAX_BUFFER_POOLS);
+	ut_ad(n_instances == srv_buf_pool_instances);
+
+	NUMA_MEMPOLICY_INTERLEAVE_IN_SCOPE;
+	warm_buf_pool_ptr = (buf_pool_t*) ut_zalloc_nokey(
+		n_instances * sizeof *warm_buf_pool_ptr);
+
+	for (i = 0; i < n_instances; i++) {
+		buf_pool_t*	ptr	= &warm_buf_pool_ptr[i];
+
+		if (warm_buf_pool_init_instance(ptr, size, i + srv_buf_pool_instances) != DB_SUCCESS) {
+
+			/* Free all the instances created so far. */
+			warm_buf_pool_free(i);
+
+			return(DB_ERROR);
+		}
+	}
+	
+	warm_buf_LRU_old_ratio_update(100 * 3/ 8, FALSE);
+	return(DB_SUCCESS);
+}
+#endif /* UNIV_WARM_BUF_CACHE */
+
 /********************************************************************//**
 free one buffer pool instance */
 static
@@ -1906,13 +2154,17 @@ buf_pool_free_instance(
 	while (--chunk >= chunks) {
 		buf_block_t*	block = chunk->blocks;
 
+#ifdef UNIV_WARM_BUF_CACHE
+		fprintf(stderr, "[KYONG] buf_pool->instance_no check: %lu\n", buf_pool->instance_no);
+        if (buf_pool->instance_no >= srv_buf_pool_instances && chunk == chunks) break;
+#endif /* UNIV_WARM_BUF_CACHE */
+
 		for (ulint i = chunk->size; i--; block++) {
 			mutex_free(&block->mutex);
 			rw_lock_free(&block->lock);
 
 			ut_d(rw_lock_free(&block->debug_latch));
 		}
-
 		buf_pool->allocator.deallocate_large(
 			chunk->mem, &chunk->mem_pfx);
 	}
@@ -1988,12 +2240,34 @@ buf_pool_free(
 		buf_pool_free_instance(buf_pool_from_array(i));
 	}
 
+#ifdef UNIV_WARM_BUF_CACHE
+  warm_buf_pool_free(srv_warm_buf_pool_instances);
+#endif /* UNIV_WARM_BUF_CACHE */
+
 	UT_DELETE(buf_chunk_map_reg);
 	buf_chunk_map_reg = buf_chunk_map_ref = NULL;
 
 	ut_free(buf_pool_ptr);
 	buf_pool_ptr = NULL;
 }
+
+#ifdef UNIV_WARM_BUF_CACHE
+/********************************************************************//**
+Frees the buffer pool at shutdown.  This must not be invoked before
+freeing all mutexes. */
+void
+warm_buf_pool_free(
+/*==========*/
+	ulint	n_instances)	/*!< in: numbere of instances to free */
+{
+    for (ulint i = 0; i < n_instances; i++) {
+    	buf_pool_free_instance(&warm_buf_pool_ptr[i]);
+    }
+
+	ut_free(warm_buf_pool_ptr);
+	warm_buf_pool_ptr = NULL;
+}
+#endif /* UNIV_WARM_BUF_CACHE */
 
 /** Reallocate a control block.
 @param[in]	buf_pool	buffer pool instance
@@ -4156,6 +4430,7 @@ loop:
 				retries = BUF_PAGE_READ_MAX_RETRIES;
 			);
 		} else {
+#ifndef UNiV_WARM_BUF_CACHE
 			ib::fatal() << "Unable to read page " << page_id
 				<< " into the buffer pool after "
 				<< BUF_PAGE_READ_MAX_RETRIES << " attempts."
@@ -4168,6 +4443,20 @@ loop:
 				" innodb_force_recovery."
 				" Please see " REFMAN " for more"
 				" details. Aborting...";
+#else
+	ib::fatal() << "Unable to read page " << page_id
+				<< " into the buffer pool after "
+				<< BUF_PAGE_READ_MAX_RETRIES << " attempts."
+				" The most probable cause of this error may"
+				" be that the table has been corrupted. Or,"
+				" the table was compressed with with an"
+				" algorithm that is not supported by this"
+				" instance. If it is not a decompress failure,"
+				" you can try to fix this problem by using"
+				" innodb_force_recovery."
+				" Please see " REFMAN " for more"
+				" details. Aborting..." << buf_pool_index(buf_pool);
+#endif /*UNIV_WARM_BUF_CACHE*/
 		}
 
 #if defined UNIV_DEBUG || defined UNIV_BUF_DEBUG
@@ -4178,6 +4467,69 @@ loop:
 		goto loop;
 	} else {
 		fix_block = block;
+#ifdef UNIV_WARM_BUF_CACHE
+        /* Buffer Hit */
+        if (buf_pool->instance_no >= srv_buf_pool_instances) {
+            if (page_id.space() == srv_ol_space_id) {
+                srv_stats.warm_buf_pages_read_ol.inc();
+            } else if (page_id.space() == srv_stk_space_id) {
+                srv_stats.warm_buf_pages_read_stk.inc();
+            } else if (page_id.space() == srv_cust_space_id) {
+                srv_stats.warm_buf_pages_read_cust.inc();
+            }
+        }
+#endif /* UNIV_WARM_BUF_CACHE */
+
+		/*kyong - read*/
+		srv_stats.tpcc_total_rd.inc();
+
+		if ((unsigned)page_id.space() == srv_cust_space_id){ //customer
+			// block->page.read_cnt++;
+			// ib::info()<<"[read hit] cust "<<page_id.page_no();
+			srv_stats.tpcc_cust_buf_rd.inc();
+		}
+
+		else if ((unsigned)page_id.space() == srv_dist_space_id){ //district
+			// ib::info()<<"[read hit] dist "<<page_id.page_no();
+			srv_stats.tpcc_dist_buf_rd.inc();
+		}
+
+		else if ((unsigned)page_id.space() == srv_his_space_id){ //history
+			// ib::info()<<"[read hit] his "<<page_id.page_no();
+			srv_stats.tpcc_his_buf_rd.inc();
+		}
+
+		else if ((unsigned)page_id.space() == srv_itm_space_id){ //item
+			// ib::info()<<"[read hit] itm "<<page_id.page_no();
+			srv_stats.tpcc_itm_buf_rd.inc();
+		}
+
+		else if ((unsigned)page_id.space() == srv_no_space_id){ //new orders
+			// ib::info()<<"[read hit] no "<<page_id.page_no();
+			srv_stats.tpcc_no_buf_rd.inc();
+		}
+
+		else if ((unsigned)page_id.space() == srv_ol_space_id){ //order_line
+			// ib::info()<<"[read hit] ol "<<page_id.page_no();
+			srv_stats.tpcc_ol_buf_rd.inc();
+		}
+
+		else if ((unsigned)page_id.space() == srv_or_space_id){ //orders
+			// ib::info()<<"[read hit] or "<<page_id.page_no();
+			srv_stats.tpcc_or_buf_rd.inc();
+		}
+
+		else if ((unsigned)page_id.space() == srv_stk_space_id){ //stock
+			// ib::info()<<"[read hit] stk "<<page_id.page_no();
+			srv_stats.tpcc_stk_buf_rd.inc();
+		}
+
+		else if ((unsigned)page_id.space() == srv_wh_space_id){ //warehouse
+			// ib::info()<<"[read hit] wh "<<page_id.page_no();
+			srv_stats.tpcc_wh_buf_rd.inc();
+		}
+		/**/
+
 	}
 
 	if (fsp_is_system_temporary(page_id.space())) {
@@ -4947,6 +5299,15 @@ buf_page_init_low(
 	bpage->oldest_modification = 0;
 	HASH_INVALIDATE(bpage, hash);
 
+#ifdef UNIV_WARM_BUF_CACHE
+    bpage->moved_to_warm_buf = false;
+    if (bpage->buf_pool_index >= srv_buf_pool_instances) {
+        bpage->cached_in_warm_buf = true;    
+    } else {
+        bpage->cached_in_warm_buf = false;
+    }
+#endif /* UNIV_WARM_BUF_CACHE */
+
 	ut_d(bpage->file_page_was_freed = FALSE);
 }
 
@@ -5066,7 +5427,27 @@ buf_page_init_for_read(
 	mtr_t		mtr;
 	ibool		lru	= FALSE;
 	void*		data;
-	buf_pool_t*	buf_pool = buf_pool_get(page_id);
+	buf_pool_t* buf_pool;
+
+#ifdef UNIV_WARM_BUF_CACHE
+    if (mode == BUF_MOVE_TO_WARM_BUF) {
+		// buf_pool = &warm_buf_pool_ptr[0];
+		ulint       ignored_page_no = page_id.page_no() >> 6;
+
+		page_id_t   id(page_id.space(), ignored_page_no);
+
+		ulint       i = id.fold() % srv_warm_buf_pool_instances;
+
+		buf_pool = &warm_buf_pool_ptr[i];
+		
+    } else { //mode is not BUF_MOVE_TO_WARM_BUF
+        buf_pool = buf_pool_get(page_id);
+    }
+
+#else
+    buf_pool = buf_pool_get(page_id);
+#endif /* UNIV_WARM_BUF_CACHE */
+
 
 	ut_ad(buf_pool);
 
@@ -5099,6 +5480,7 @@ buf_page_init_for_read(
 	}
 
 	buf_pool_mutex_enter(buf_pool);
+	
 
 	hash_lock = buf_page_hash_lock_get(buf_pool, page_id);
 	rw_lock_x_lock(hash_lock);
@@ -5119,6 +5501,7 @@ buf_page_init_for_read(
 	}
 
 	if (block) {
+
 		bpage = &block->page;
 
 		buf_page_mutex_enter(block);
@@ -5629,6 +6012,7 @@ buf_page_io_complete(
 			}
 			buf_pool->n_pend_unzip--;
 		} else {
+
 			ut_a(uncompressed);
 			frame = ((buf_block_t*) bpage)->frame;
 		}
@@ -5813,6 +6197,19 @@ corrupt:
 					     BUF_IO_READ);
 		}
 
+#ifdef UNIV_WARM_BUF_CACHE 
+
+        if (bpage->cached_in_warm_buf) {
+			/// buf_io_complete(flush 시 호출) 호출했더니 warm buf에 캐싱되어 있더라
+            if (bpage->id.space() == srv_ol_space_id) {
+                srv_stats.warm_buf_pages_stored_ol.inc();
+            } else if (bpage->id.space() == srv_stk_space_id) {
+                srv_stats.warm_buf_pages_stored_stk.inc();
+            } else if (bpage->id.space() == srv_cust_space_id) {
+                srv_stats.warm_buf_pages_stored_cust.inc();
+            }
+        }
+#endif /* UNIV_WARM_BUF_CACHE */
 		mutex_exit(buf_page_get_mutex(bpage));
 
 		break;
@@ -5821,7 +6218,8 @@ corrupt:
 		/* Write means a flush operation: call the completion
 		routine in the flush system */
 
-		buf_flush_write_complete(bpage);
+		buf_flush_write_complete(bpage); //Updates the flush system data structures when a write is completed,
+										// remove a block from flush list
 
 		if (uncompressed) {
 			rw_lock_sx_unlock_gen(&((buf_block_t*) bpage)->lock,
@@ -5830,21 +6228,48 @@ corrupt:
 
 		buf_pool->stat.n_pages_written++;
 
+#ifdef UNIV_WARM_BUF_CACHE 
+		//flush가 필요한 페이지
+        if (bpage->cached_in_warm_buf) {
+            if (bpage->id.space() == srv_ol_space_id ) {
+                srv_stats.warm_buf_pages_written_ol.inc();
+            } else if (bpage->id.space() == srv_stk_space_id) {
+                srv_stats.warm_buf_pages_written_stk.inc();
+            } else if (bpage->id.space() == srv_cust_space_id) {
+                srv_stats.warm_buf_pages_written_cust.inc();
+            }
+
+			if (buf_page_get_flush_type(bpage) == BUF_FLUSH_LRU ){
+				srv_stats.warm_buf_pages_written_lru.inc();
+			} else if (buf_page_get_flush_type(bpage) == BUF_FLUSH_LIST){
+				srv_stats.warm_buf_pages_written_cp.inc();
+			}
+        }
+#endif /* UNIV_WARM_BUF_CACHE */
+
 		/* We decide whether or not to evict the page from the
 		LRU list based on the flush_type.
-		* BUF_FLUSH_LIST: don't evict
+		* BUF_FLUSH_LIST: don't evict //ky: 현재 dirty한 페이지 내역만 디스크로 cp하기 때문에 LRU list에서까지 쫓아낼 필요는 없음
+										// 따라서, LRU list에 그대로 남겨주고 상태만 clean page로 바꾼다.
 		* BUF_FLUSH_LRU: always evict
 		* BUF_FLUSH_SINGLE_PAGE: eviction preference is passed
 		by the caller explicitly. */
-		if (buf_page_get_flush_type(bpage) == BUF_FLUSH_LRU) {
+		if (buf_page_get_flush_type(bpage) == BUF_FLUSH_LRU  //ky: 만약 현재 flush type이 LRU면 LRU list에서 제거, free list로 옮김
+#ifdef UNIV_WARM_BUF_CACHE
+			|| bpage->moved_to_warm_buf //원래 normal buffer에 있었으나 flush 했다고 속이고 LRU list에서 제거
+#endif /*UNIV_WARM_BUF_CACHE*/
+		) {
 			evict = true;
 		}
 
-		if (evict) {
+		if (evict) { //LRU
 			mutex_exit(buf_page_get_mutex(bpage));
 			buf_LRU_free_page(bpage, true);
+#ifdef UNIV_WARM_BUF_CACHE
+            bpage->moved_to_warm_buf = false;
+#endif /* UNIV_WARM_BUF_CACHE */
 		} else {
-			mutex_exit(buf_page_get_mutex(bpage));
+			mutex_exit(buf_page_get_mutex(bpage)); //ky: 여기가 cp
 		}
 
 		break;
@@ -5964,6 +6389,11 @@ buf_pool_invalidate(void)
 	for (i = 0; i < srv_buf_pool_instances; i++) {
 		buf_pool_invalidate_instance(buf_pool_from_array(i));
 	}
+#ifdef UNIV_WARM_BUF_CACHE
+	for (i = 0; i < srv_warm_buf_pool_instances; i++) {
+		buf_pool_invalidate_instance(&warm_buf_pool_ptr[i]);
+	}
+#endif /* UNIV_WARM_BUF_CACHE */
 }
 
 #if defined UNIV_DEBUG || defined UNIV_BUF_DEBUG
@@ -6465,6 +6895,25 @@ buf_get_n_pending_read_ios(void)
 	return(pend_ios);
 }
 
+#ifdef UNIV_WARM_BUF_CACHE
+/*********************************************************************//**
+Returns the number of pending buf pool read ios.
+@return number of pending read I/O operations */
+ulint
+warm_buf_get_n_pending_read_ios(void)
+/*============================*/
+{
+	ulint	pend_ios = 0;
+
+	for (ulint i = 0; i < srv_warm_buf_pool_instances; i++) {
+		pend_ios += buf_pool_from_array(i+srv_buf_pool_instances)->n_pend_reads;
+	}
+
+	return(pend_ios);
+}
+
+#endif /*UNIV_WARM_BUF_CACHE*/
+
 /*********************************************************************//**
 Returns the ratio in percents of modified pages in the buffer pool /
 database pages in the buffer pool.
@@ -6762,7 +7211,89 @@ buf_print_io_instance(
 		pool_info->lru_len, pool_info->unzip_lru_len,
 		pool_info->io_sum, pool_info->io_cur,
 		pool_info->unzip_sum, pool_info->unzip_cur);
+
+#ifdef UNIV_WARM_BUF_CACHE
+    fprintf(file, "Total number of page read performed = " ULINTPF "\n", pool_info->n_pages_read);
+    fprintf(file, "Total number of page created performed = " ULINTPF "\n", pool_info->n_pages_created);
+    fprintf(file, "Total number of page written performed = " ULINTPF "\n", pool_info->n_pages_written);
+    fprintf(file, "Total number of page gets performed = " ULINTPF "\n", pool_info->n_page_gets);
+#endif /* UNIV_WARM_BUF_CACHE */
+
 }
+
+#ifdef UNIV_WARM_BUF_CACHE
+/*********************************************************************//**
+Prints info of total pages of the WARM buffer. */
+void
+buf_print_total_warm_buf_info(
+/*==================*/
+	FILE*		file)		    /*!< in/out: buffer where to print */
+{
+    fprintf(file,
+        "---The number of pages stored in WARM buffer\n"
+        "Customer      " ULINTPF
+        "\n"
+        "Order-Line      " ULINTPF
+        "\n"
+        "Stock           " ULINTPF "\n",
+        (ulint)srv_stats.warm_buf_pages_stored_cust,
+        (ulint)srv_stats.warm_buf_pages_stored_ol,
+        (ulint)srv_stats.warm_buf_pages_stored_stk);
+
+    fprintf(file,
+        "---The number of pages read in WARM buffer\n"
+        "Customer      " ULINTPF
+        "\n"
+        "Order-Line      " ULINTPF
+        "\n"
+        "Stock           " ULINTPF "\n",
+        (ulint)srv_stats.warm_buf_pages_read_cust,
+        (ulint)srv_stats.warm_buf_pages_read_ol,
+        (ulint)srv_stats.warm_buf_pages_read_stk);
+
+    fprintf(file,
+        "---The number of pages written in WARM buffer\n"
+        "Customer      " ULINTPF
+        "\n"
+        "Order-Line      " ULINTPF
+        "\n"
+        "Stock           " ULINTPF "\n",
+        (ulint)srv_stats.warm_buf_pages_written_cust,
+        (ulint)srv_stats.warm_buf_pages_written_ol,
+        (ulint)srv_stats.warm_buf_pages_written_stk);
+
+	fprintf(file,
+        "---Pages that move to warm buf\n"
+        "Customer      " ULINTPF
+        "\n"
+        "Order-Line      " ULINTPF
+        "\n"
+        "Stock           " ULINTPF "\n",
+        (ulint)srv_stats.move_to_warm_buf_cnt_cust,
+        (ulint)srv_stats.move_to_warm_buf_cnt_ol,
+        (ulint)srv_stats.move_to_warm_buf_cnt_stk);
+	
+	fprintf(file,
+        "---Pages that stay in original buf\n"
+        "Customer      " ULINTPF
+        "\n"
+        "Order-Line      " ULINTPF
+        "\n"
+        "Stock           " ULINTPF "\n",
+        (ulint)srv_stats.stay_in_buf_cnt_cust,
+        (ulint)srv_stats.stay_in_buf_cnt_ol,
+        (ulint)srv_stats.stay_in_buf_cnt_stk);
+	
+	fprintf(file,
+        "---Warm Page Statistics\n"
+        "CP      " ULINTPF
+        "\n"
+        "LRU           " ULINTPF "\n",
+        (ulint)srv_stats.warm_buf_pages_written_cp,
+        (ulint)srv_stats.warm_buf_pages_written_lru);
+}
+#endif /* UNIV_WARM_BUF_CACHE */
+
 
 /*********************************************************************//**
 Prints info of the buffer i/o. */
@@ -6779,10 +7310,17 @@ buf_print_io(
 	one extra buf_pool_info_t, the last one stores
 	aggregated/total values from all pools */
 	if (srv_buf_pool_instances > 1) {
-		pool_info = (buf_pool_info_t*) ut_zalloc_nokey((
-			srv_buf_pool_instances + 1) * sizeof *pool_info);
 
+#ifdef UNIV_WARM_BUF_CACHE
+        pool_info = (buf_pool_info_t*) ut_zalloc_nokey((
+			srv_buf_pool_instances + 1 + srv_warm_buf_pool_instances) * sizeof *pool_info);
+		pool_info_total = &pool_info[srv_buf_pool_instances + srv_warm_buf_pool_instances];
+#else
+        pool_info = (buf_pool_info_t*) ut_zalloc_nokey((
+			srv_buf_pool_instances + 1) * sizeof *pool_info);
 		pool_info_total = &pool_info[srv_buf_pool_instances];
+#endif /* UNIV_WARM_BUF_CACHE */
+
 	} else {
 		ut_a(srv_buf_pool_instances == 1);
 
@@ -6791,10 +7329,22 @@ buf_print_io(
 				ut_zalloc_nokey(sizeof *pool_info));
 	}
 
-	for (i = 0; i < srv_buf_pool_instances; i++) {
+#ifdef UNIV_WARM_BUF_CACHE
+	for (i = 0; i < srv_buf_pool_instances + srv_warm_buf_pool_instances; i++) {
+#else
+    for (i = 0; i < srv_buf_pool_instances; i++) {
+#endif /* UNIV_WARM_BUF_CACHE */ 
 		buf_pool_t*	buf_pool;
 
-		buf_pool = buf_pool_from_array(i);
+#ifdef UNIV_WARM_BUF_CACHE
+        if (i >= srv_buf_pool_instances) {
+            buf_pool = &warm_buf_pool_ptr[i - srv_buf_pool_instances];        
+        } else {
+            buf_pool = buf_pool_from_array(i);
+        }
+#else
+        buf_pool = buf_pool_from_array(i);
+#endif /* UNIV_WARM_BUF_CACHE */ 
 
 		/* Fetch individual buffer pool info and calculate
 		aggregated stats along the way */
@@ -6823,6 +7373,22 @@ buf_print_io(
 			buf_print_io_instance(&pool_info[i], file);
 		}
 	}
+
+#ifdef UNIV_WARM_BUF_CACHE
+    if (srv_warm_buf_pool_instances > 0) {
+        fputs("----------------------\n"
+        "WARM BUFFER POOL INFO\n"
+        "----------------------\n", file);
+
+        for (i = srv_buf_pool_instances; i < srv_buf_pool_instances + srv_warm_buf_pool_instances; i++) {
+            fprintf(file, "---BUFFER POOL " ULINTPF "\n", i);
+            buf_print_io_instance(&pool_info[i], file);
+        }
+
+        buf_print_total_warm_buf_info(file);
+    }
+#endif /* UNIV_WARM_BUF_CACHE */
+
 
 	ut_free(pool_info);
 }
@@ -6869,6 +7435,15 @@ buf_all_freed(void)
 			return(FALSE);
 		}
 	}
+#ifdef UNIV_WARM_BUF_CACHE
+	for (ulint i = 0; i < srv_warm_buf_pool_instances; i++) {
+        buf_pool_t* buf_pool = &warm_buf_pool_ptr[i];
+
+		if (!buf_all_freed_instance(buf_pool)) {
+			return(FALSE);
+		}
+	}
+#endif /* UNIV_WARM_BUF_CACHE */
 
 	return(TRUE);
 }

@@ -53,6 +53,11 @@ extern my_bool		innodb_page_cleaner_disabled_debug;
 /** Event to synchronise with the flushing. */
 extern os_event_t	buf_flush_event;
 
+#ifdef UNIV_WARM_BUF_CACHE
+extern os_event_t warm_buf_flush_event;
+extern bool warm_buf_page_cleaner_is_active;
+#endif /* UNIV_WARM_BUF_CACHE */
+
 class ut_stage_alter_t;
 
 /********************************************************************//**
@@ -235,6 +240,97 @@ buf_flush_page_cleaner_disabled_debug_update(
 	const void*			save);
 #endif /* UNIV_DEBUG */
 
+#ifdef UNIV_WARM_BUF_CACHE
+/******************************************************************//**
+page_cleaner thread tasked with flushing dirty pages from the WARM
+buffer pools. */
+extern "C"
+os_thread_ret_t
+DECLARE_THREAD(buf_flush_warm_buf_page_cleaner_thread)(
+/*===============================================*/
+	void*	arg);		/*!< in: a dummy parameter required by
+				os_thread_create */
+
+// /******************************************************************//**
+// page_cleaner thread tasked with flushing dirty pages from the WARM
+// buffer pools. */
+// extern "C"
+// os_thread_ret_t
+// DECLARE_THREAD(buf_flush_warm_buf_page_cleaner_thread2)(
+// /*===============================================*/
+// 	void*	arg);		/*!< in: a dummy parameter required by
+// 				os_thread_create */
+
+// /******************************************************************//**
+// page_cleaner thread tasked with flushing dirty pages from the WARM
+// buffer pools. */
+// extern "C"
+// os_thread_ret_t
+// DECLARE_THREAD(buf_flush_warm_buf_page_cleaner_thread3)(
+// /*===============================================*/
+// 	void*	arg);		/*!< in: a dummy parameter required by
+// 				os_thread_create */
+
+// /******************************************************************//**
+// page_cleaner thread tasked with flushing dirty pages from the WARM
+// buffer pools. */
+// extern "C"
+// os_thread_ret_t
+// DECLARE_THREAD(buf_flush_warm_buf_page_cleaner_thread4)(
+// /*===============================================*/
+// 	void*	arg);		/*!< in: a dummy parameter required by
+// 				os_thread_create */
+
+// /******************************************************************//**
+// page_cleaner thread tasked with flushing dirty pages from the WARM
+// buffer pools. */
+// extern "C"
+// os_thread_ret_t
+// DECLARE_THREAD(buf_flush_warm_buf_page_cleaner_thread5)(
+// /*===============================================*/
+// 	void*	arg);		/*!< in: a dummy parameter required by
+// 				os_thread_create */
+			
+// /******************************************************************//**
+// page_cleaner thread tasked with flushing dirty pages from the WARM
+// buffer pools. */
+// extern "C"
+// os_thread_ret_t
+// DECLARE_THREAD(buf_flush_warm_buf_page_cleaner_thread6)(
+// /*===============================================*/
+// 	void*	arg);		/*!< in: a dummy parameter required by
+// 				os_thread_create */
+
+// /******************************************************************//**
+// page_cleaner thread tasked with flushing dirty pages from the WARM
+// buffer pools. */
+// extern "C"
+// os_thread_ret_t
+// DECLARE_THREAD(buf_flush_warm_buf_page_cleaner_thread7)(
+// /*===============================================*/
+// 	void*	arg);		/*!< in: a dummy parameter required by
+// 				os_thread_create */
+
+
+// /******************************************************************//**
+// page_cleaner thread tasked with flushing dirty pages from the WARM
+// buffer pools. */
+// extern "C"
+// os_thread_ret_t
+// DECLARE_THREAD(buf_flush_warm_buf_page_cleaner_thread8)(
+// /*===============================================*/
+// 	void*	arg);		/*!< in: a dummy parameter required by
+// 				os_thread_create */
+
+
+/*********************************************************************//**
+Wait for any possible LRU flushes that are in progress to end. */
+void
+buf_flush_wait_warm_buf_LRU_batch_end(
+/*==============================*/
+    buf_pool_t* buf_pool);  /*!< in: buffer pool instance */
+#endif /* UNIV_WARM_BUF_CACHE */
+
 /******************************************************************//**
 page_cleaner thread tasked with flushing dirty pages from the buffer
 pools. As of now we'll have only one coordinator of this thread.
@@ -258,6 +354,32 @@ DECLARE_THREAD(buf_flush_page_cleaner_worker)(
 Initialize page_cleaner. */
 void
 buf_flush_page_cleaner_init(void);
+
+
+#ifdef UNIV_WARM_BUF_CACHE
+/******************************************************************//**
+page_cleaner thread tasked with flushing dirty pages from the buffer
+pools. As of now we'll have only one coordinator of this thread.
+@return a dummy parameter */
+extern "C"
+os_thread_ret_t
+DECLARE_THREAD(warm_buf_flush_page_cleaner_coordinator)(
+/*===============================================*/
+	void*	arg);		/*!< in: a dummy parameter required by
+				os_thread_create */
+/******************************************************************//**
+Worker thread of page_cleaner.
+@return a dummy parameter */
+extern "C"
+os_thread_ret_t
+DECLARE_THREAD(warm_buf_flush_page_cleaner_worker)(
+/*==========================================*/
+	void*	arg);		/*!< in: a dummy parameter required by
+				os_thread_create */
+/*Initialize warm buffer page cleaner*/
+void warm_buf_flush_page_cleaner_init(void);
+#endif /*UNIV_WARM_BUF_CACHE*/
+
 /*=============================*/
 /*********************************************************************//**
 Clears up tail of the LRU lists:

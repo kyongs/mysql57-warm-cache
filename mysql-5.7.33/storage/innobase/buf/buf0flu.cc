@@ -97,6 +97,12 @@ static lsn_t buf_flush_sync_lsn = 0;
 mysql_pfs_key_t page_cleaner_thread_key;
 #endif /* UNIV_PFS_THREAD */
 
+#ifdef UNIV_WARM_BUF_CACHE
+mysql_pfs_key_t warm_buf_page_cleaner_thread_key;
+os_event_t warm_buf_flush_event;
+bool warm_buf_page_cleaner_is_active = false;
+#endif /*UNIV_WARM_BUF_CACHE*/
+
 /** Event to synchronise with the flushing. */
 os_event_t	buf_flush_event;
 
@@ -196,6 +202,10 @@ struct page_cleaner_t {
 };
 
 static page_cleaner_t*	page_cleaner = NULL;
+
+#ifdef UNIV_WARM_BUF_CACHE
+static page_cleaner_t*	warm_buf_page_cleaner = NULL;
+#endif /*UNIV_WARM_BUF_CACHE*/
 
 #ifdef UNIV_DEBUG
 my_bool innodb_page_cleaner_disabled_debug;
@@ -577,8 +587,7 @@ i.e., the transition FILE_PAGE => NOT_USED allowed.
 ibool
 buf_flush_ready_for_replace(
 /*========================*/
-	buf_page_t*	bpage)	/*!< in: buffer control block, must be
-				buf_page_in_file(bpage) and in the LRU list */
+	buf_page_t*	bpage)	/*!< in: buffer control block, must be buf_page_in_file(bpage) and in the LRU list */
 {
 #ifdef UNIV_DEBUG
 	buf_pool_t*	buf_pool = buf_pool_from_bpage(bpage);
@@ -606,8 +615,7 @@ Returns true if the block is modified and ready for flushing.
 bool
 buf_flush_ready_for_flush(
 /*======================*/
-	buf_page_t*	bpage,	/*!< in: buffer control block, must be
-				buf_page_in_file(bpage) */
+	buf_page_t*	bpage,	/*!< in: buffer control block, must be buf_page_in_file(bpage) */
 	buf_flush_t	flush_type)/*!< in: type of flush */
 {
 #ifdef UNIV_DEBUG
@@ -1045,7 +1053,13 @@ buf_flush_write_block_low(
 
 	/* Force the log to the disk before writing the modified block */
 	if (!srv_read_only_mode) {
-		log_write_up_to(bpage->newest_modification, true);
+// #ifdef UNIV_WARM_BUF_CACHE
+// 			if (bpage->buf_pool_index < srv_buf_pool_instances) {
+// 				log_write_up_to(bpage->newest_modification, true);
+// 			}
+// #else
+			log_write_up_to(bpage->newest_modification, true);
+// #endif /* UNIV_WARM_BUF_CACHE */
 	}
 
 	switch (buf_page_get_state(bpage)) {
@@ -1084,7 +1098,497 @@ buf_flush_write_block_low(
 	Given the nature and load of temporary tablespace doublewrite buffer
 	adds an overhead during flushing. */
 
-	if (!srv_use_doublewrite_buf
+#ifdef UNIV_WARM_BUF_CACHE
+    if (bpage->moved_to_warm_buf
+        && bpage->buf_pool_index < srv_buf_pool_instances
+        && bpage->buf_fix_count == 0) {
+    
+		/* warm buffer page 생성*/
+        buf_page_t *warm_buf_page;
+        page_id_t page_id(bpage->id.space(), bpage->id.page_no());
+        const page_size_t page_size = page_size_t(bpage->size.logical(), bpage->size.logical(), false);
+        dberr_t err;
+
+        /* Add the target page to the WARM_BUF buffer. */
+        warm_buf_page = buf_page_init_for_read(&err, BUF_MOVE_TO_WARM_BUF, page_id, page_size, false);
+        
+        if (warm_buf_page == NULL)    goto normal;
+
+		/* statistics -> warm buffer로 이동하는 페이지 개수 */
+		if(bpage->id.space() == srv_stk_space_id){
+            srv_stats.move_to_warm_buf_cnt_stk.inc();
+        } else if (bpage->id.space() == srv_cust_space_id){
+            srv_stats.move_to_warm_buf_cnt_cust.inc();
+        } else if (bpage->id.space() == srv_ol_space_id){
+            srv_stats.move_to_warm_buf_cnt_ol.inc();
+        }
+
+		//memory copy
+        memcpy(((buf_block_t *)warm_buf_page)->frame, ((buf_block_t *)bpage)->frame, UNIV_PAGE_SIZE);
+
+        /* Set the oldest LSN of the WARM_BUF page to the previous newest LSN. */
+        buf_flush_note_modification((buf_block_t *)warm_buf_page, bpage->oldest_modification, bpage->newest_modification, warm_buf_page->flush_observer);
+        // buf_flush_note_modification((buf_block_t *)warm_buf_page, bpage->newest_modification, bpage->newest_modification, warm_buf_page->flush_observer);
+
+        // TODO: WARM_BUF-porting
+        // 1
+        // flush_cache(((buf_block_t *)warm_buf_page)->frame, UNIV_PAGE_SIZE);
+        // 2
+        
+        /* Remove the target page from the original buffer pool. */
+        buf_page_io_complete(bpage, true); //기존 normal buffer의 페이지는 
+        buf_page_io_complete(warm_buf_page);
+
+        // buf_pool_t*	buf_pool = buf_pool_from_bpage(warm_buf_page);
+		// if((unsigned)bpage->id.space() == srv_cust_space_id){ 
+			// ib::info() << warm_buf_page->id.space() << " "
+			// 		<< warm_buf_page->id.page_no() << " is moved to "
+			// 		<< warm_buf_page->buf_pool_index << " from " << bpage->buf_pool_index;
+		// }
+
+    } else {
+normal:
+        bpage->moved_to_warm_buf = false;
+
+        /*ib::info() << bpage->id.space() << " " << bpage->id.page_no()
+                << " is batch written. cached? " << bpage->cached_in_warm_buf
+                << " moved? " << bpage->moved_to_warm_buf
+                << " flush-type: " << flush_type
+                << " buf-fix: " << bpage->buf_fix_count
+                << " with oldest: " << bpage->oldest_modification
+                << " newest: " << bpage->newest_modification
+                << " lsn-gap: " << bpage->newest_modification - bpage->oldest_modification;*/
+
+		 if(bpage->id.space() == srv_stk_space_id){
+            srv_stats.stay_in_buf_cnt_stk.inc();
+        } else if (bpage->id.space() == srv_cust_space_id){
+            srv_stats.stay_in_buf_cnt_cust.inc();
+        } else if (bpage->id.space() == srv_ol_space_id){
+            srv_stats.stay_in_buf_cnt_ol.inc();
+        }
+		/*kyong - write*/
+        if ((unsigned)bpage->id.space() == srv_cust_space_id){ //customer
+
+            //increate write count
+            srv_stats.tpcc_cust_total_wr.inc();
+
+            //increase flush type per write
+            if(bpage->flush_type == BUF_FLUSH_LRU){
+            	srv_stats.tpcc_cust_lru_wr.inc();
+				// ib::info()<<"[write] cust "<<bpage->id.page_no()<<" flush_type: LRU";
+
+				if(bpage->buf_pool_index == srv_buf_pool_instances){
+					srv_stats.tpcc_cust_warm_lru.inc();
+				} else {
+					srv_stats.tpcc_cust_normal_lru.inc();
+				}
+            }
+            else if(bpage->flush_type == BUF_FLUSH_LIST){
+            	srv_stats.tpcc_cust_cp_wr.inc();
+				// ib::info()<<"[write] cust "<<bpage->id.page_no()<<" flush_type: CP";
+
+				if(bpage->buf_pool_index == srv_buf_pool_instances){
+					srv_stats.tpcc_cust_warm_cp.inc();
+				} else {
+					srv_stats.tpcc_cust_normal_cp.inc();
+				}
+            }
+            else if (bpage->flush_type == BUF_FLUSH_SINGLE_PAGE) {
+            	srv_stats.tpcc_cust_sp_wr.inc();
+				// ib::info()<<"[write] cust "<<bpage->id.page_no()<<" flush_type: SP";
+
+				if(bpage->buf_pool_index == srv_buf_pool_instances){
+					srv_stats.tpcc_cust_warm_sp.inc();
+				} else {
+					srv_stats.tpcc_cust_normal_sp.inc();
+				}
+            }
+        }
+
+        else if ((unsigned)bpage->id.space() == srv_dist_space_id){ //district
+            //increate write count
+            srv_stats.tpcc_dist_total_wr.inc();
+
+            //increase flush type per write
+            if(bpage->flush_type == BUF_FLUSH_LRU){
+            	srv_stats.tpcc_dist_lru_wr.inc();
+				// ib::info()<<"[write] dist "<<bpage->id.page_no()<<" flush_type: LRU";
+            }
+            else if(bpage->flush_type == BUF_FLUSH_LIST){
+            	srv_stats.tpcc_dist_cp_wr.inc();
+				// ib::info()<<"[write] dist "<<bpage->id.page_no()<<" flush_type: CP";
+            }
+            else if (bpage->flush_type == BUF_FLUSH_SINGLE_PAGE) {
+            	srv_stats.tpcc_dist_sp_wr.inc();
+				// ib::info()<<"[write] dist "<<bpage->id.page_no()<<" flush_type: SP";
+            }
+
+        }
+
+        else if ((unsigned)bpage->id.space() == srv_his_space_id){ //history
+            //increate write count
+            srv_stats.tpcc_his_total_wr.inc();
+
+            //increase flush type per write
+            if(bpage->flush_type == BUF_FLUSH_LRU){
+            	srv_stats.tpcc_his_lru_wr.inc();
+				// ib::info()<<"[write] his "<<bpage->id.page_no()<<" flush_type: LRU";
+            }
+            else if(bpage->flush_type == BUF_FLUSH_LIST){
+            	srv_stats.tpcc_his_cp_wr.inc();
+				// ib::info()<<"[write] his "<<bpage->id.page_no()<<" flush_type: CP";
+            }
+            else if (bpage->flush_type == BUF_FLUSH_SINGLE_PAGE) {
+            	srv_stats.tpcc_his_sp_wr.inc();
+				// ib::info()<<"[write] his "<<bpage->id.page_no()<<" flush_type: SP";
+            }
+        }
+
+        else if ((unsigned)bpage->id.space() == srv_itm_space_id){ //item
+            //increate write count
+            srv_stats.tpcc_itm_total_wr.inc();
+
+            //increase flush type per write
+            if(bpage->flush_type == BUF_FLUSH_LRU){
+            	srv_stats.tpcc_itm_lru_wr.inc();
+            }
+            else if(bpage->flush_type == BUF_FLUSH_LIST){
+            	srv_stats.tpcc_itm_cp_wr.inc();
+            }
+            else if (bpage->flush_type == BUF_FLUSH_SINGLE_PAGE) {
+            	srv_stats.tpcc_itm_sp_wr.inc();
+            }
+        }
+
+        else if ((unsigned)bpage->id.space() == srv_no_space_id){ //new orders
+            //increate write count
+            srv_stats.tpcc_no_total_wr.inc();
+
+            //increase flush type per write
+            if(bpage->flush_type == BUF_FLUSH_LRU){
+            	srv_stats.tpcc_no_lru_wr.inc();
+				// ib::info()<<"[write] no "<<bpage->id.page_no()<<" flush_type: LRU";
+            }
+            else if(bpage->flush_type == BUF_FLUSH_LIST){
+            	srv_stats.tpcc_no_cp_wr.inc();
+				// ib::info()<<"[write] no "<<bpage->id.page_no()<<" flush_type: CP";
+            }
+            else if (bpage->flush_type == BUF_FLUSH_SINGLE_PAGE) {
+            	srv_stats.tpcc_no_sp_wr.inc();
+				// ib::info()<<"[write] no "<<bpage->id.page_no()<<" flush_type: SP";
+            }
+        }
+
+        else if ((unsigned)bpage->id.space() == srv_ol_space_id){ //order_line
+            //increate write count
+            srv_stats.tpcc_ol_total_wr.inc();
+
+            //increase flush type per write
+            if(bpage->flush_type == BUF_FLUSH_LRU){
+            	srv_stats.tpcc_ol_lru_wr.inc();
+				// ib::info()<<"[write] ol "<<bpage->id.page_no()<<" flush_type: LRU";
+            }
+            else if(bpage->flush_type == BUF_FLUSH_LIST){
+            	srv_stats.tpcc_ol_cp_wr.inc();
+				// ib::info()<<"[write] ol "<<bpage->id.page_no()<<" flush_type: CP";
+            }
+            else if (bpage->flush_type == BUF_FLUSH_SINGLE_PAGE) {
+            	srv_stats.tpcc_ol_sp_wr.inc();
+				// ib::info()<<"[write] ol "<<bpage->id.page_no()<<" flush_type: SP";
+            }
+        }
+
+        else if ((unsigned)bpage->id.space() == srv_or_space_id){ //orders
+			
+            //increate write count
+            srv_stats.tpcc_or_total_wr.inc();
+
+            //increase flush type per write
+            if(bpage->flush_type == BUF_FLUSH_LRU){
+				srv_stats.tpcc_or_lru_wr.inc();
+				// ib::info()<<"[write] or "<<bpage->id.page_no()<<" flush_type: LRU";
+            }
+            else if(bpage->flush_type == BUF_FLUSH_LIST){
+				srv_stats.tpcc_or_cp_wr.inc();
+				// ib::info()<<"[write] or "<<bpage->id.page_no()<<" flush_type: CP";
+            }
+            else if (bpage->flush_type == BUF_FLUSH_SINGLE_PAGE) {
+				srv_stats.tpcc_or_sp_wr.inc();
+				// ib::info()<<"[write] or "<<bpage->id.page_no()<<" flush_type: SP";
+            }
+        }
+
+        else if ((unsigned)bpage->id.space() == srv_stk_space_id){ //stock
+            //increate write count
+            srv_stats.tpcc_stk_total_wr.inc();
+
+            //increase flush type per write
+            if(bpage->flush_type == BUF_FLUSH_LRU){
+            	srv_stats.tpcc_stk_lru_wr.inc();
+				// ib::info()<<"[write] stk "<<bpage->id.page_no()<<" flush_type: LRU";
+
+				if(bpage->buf_pool_index == srv_buf_pool_instances){
+					srv_stats.tpcc_stk_warm_lru.inc();
+				} else {
+					srv_stats.tpcc_stk_normal_lru.inc();
+				}
+            }
+            else if(bpage->flush_type == BUF_FLUSH_LIST){
+            	srv_stats.tpcc_stk_cp_wr.inc();
+				// ib::info()<<"[write] stk "<<bpage->id.page_no()<<" flush_type: CP";
+
+				if(bpage->buf_pool_index == srv_buf_pool_instances){
+					srv_stats.tpcc_stk_warm_cp.inc();
+				} else {
+					srv_stats.tpcc_stk_normal_cp.inc();
+				}
+            }
+            else if (bpage->flush_type == BUF_FLUSH_SINGLE_PAGE) {
+            	srv_stats.tpcc_stk_sp_wr.inc();
+				// ib::info()<<"[write] stk "<<bpage->id.page_no()<<" flush_type: SP";
+
+				if(bpage->buf_pool_index == srv_buf_pool_instances){
+					srv_stats.tpcc_stk_warm_sp.inc();
+				} else {
+					srv_stats.tpcc_stk_normal_sp.inc();
+				}
+            }
+        }
+
+        else if ((unsigned)bpage->id.space() == srv_wh_space_id){ //warehouse
+            //increate write count
+            srv_stats.tpcc_wh_total_wr.inc();
+
+            //increase flush type per write
+            if(bpage->flush_type == BUF_FLUSH_LRU){
+            	srv_stats.tpcc_wh_lru_wr.inc();
+				// ib::info()<<"[write] wh "<<bpage->id.page_no()<<" flush_type: LRU";
+            }
+            else if(bpage->flush_type == BUF_FLUSH_LIST){
+            	srv_stats.tpcc_wh_cp_wr.inc();
+				// ib::info()<<"[write] wh "<<bpage->id.page_no()<<" flush_type: CP";
+            }
+            else if (bpage->flush_type == BUF_FLUSH_SINGLE_PAGE) {
+            	srv_stats.tpcc_wh_sp_wr.inc();
+				// ib::info()<<"[write] wh "<<bpage->id.page_no()<<" flush_type: SP";
+            }
+        }
+
+
+        if (!srv_use_doublewrite_buf
+            || buf_dblwr == NULL
+            || srv_read_only_mode
+            || fsp_is_system_temporary(bpage->id.space())
+            || bpage->cached_in_warm_buf) {
+        
+            ut_ad(!srv_read_only_mode
+                    || fsp_is_system_temporary(bpage->id.space()));
+            
+            ulint	type = IORequest::WRITE | IORequest::DO_NOT_WAKE;
+
+            IORequest	request(type);
+
+            // lsn_t lsn_gap = bpage->newest_modification - bpage->oldest_modification;
+
+            // ib::info() << bpage->id.space() << " " << bpage->id.page_no()
+            //   << " is batch written. cached? " << bpage->cached_in_warm_buf
+            //   << " moved? " << bpage->moved_to_warm_buf
+            //   << " flush-type: " << flush_type
+            //   << " buf-fix: " << bpage->buf_fix_count
+            //   << " with oldest: " << bpage->oldest_modification
+            //   << " newest: " << bpage->newest_modification
+            //   << " lsn-gap: " << lsn_gap;
+            
+            fil_io(request,
+                    sync, bpage->id, bpage->size, 0, bpage->size.physical(),
+                    frame, bpage); 
+
+            // jhpark: write oldest_modification_lsn of current WARM-BUF-caching page
+            // pm_mmap_write_logfile_header_lsn(bpage->oldest_modification);
+
+        } else if (flush_type == BUF_FLUSH_SINGLE_PAGE) {
+            buf_dblwr_write_single_page(bpage, sync);
+        } else {
+            ut_ad(!sync);
+            buf_dblwr_add_to_batch(bpage);
+        }
+        /* When doing single page flushing the IO is done synchronously
+           and we flush the changes to disk only for the tablespace we
+           are working on. */
+        if (sync) {
+            if (!bpage->cached_in_warm_buf) { /// FIXME
+                ut_ad(flush_type == BUF_FLUSH_SINGLE_PAGE);
+                fil_flush(bpage->id.space());
+            }
+            
+            /* true means we want to evict this page from the
+               LRU list as well. */
+            buf_page_io_complete(bpage, true);
+        }
+    }
+#else
+		/*kyong - write*/
+        
+        if ((unsigned)bpage->id.space() == srv_cust_space_id){ //customer
+            //increate write count
+            srv_stats.tpcc_cust_total_wr.inc();
+            //increase flush type per write
+            if(bpage->flush_type == BUF_FLUSH_LRU){
+				// ib::info()<<"[write] cust "<<bpage->id.page_no()<<" flush_type: LRU";
+            	srv_stats.tpcc_cust_lru_wr.inc();
+            }
+            else if(bpage->flush_type == BUF_FLUSH_LIST){
+				// ib::info()<<"[write] cust "<<bpage->id.page_no()<<" flush_type: CP";
+            	srv_stats.tpcc_cust_cp_wr.inc();
+            }
+            else if (bpage->flush_type == BUF_FLUSH_SINGLE_PAGE) {
+				// ib::info()<<"[write] cust "<<bpage->id.page_no()<<" flush_type: SP";
+            	srv_stats.tpcc_cust_sp_wr.inc();
+            }
+        }
+
+        else if ((unsigned)bpage->id.space() == srv_dist_space_id){ //district
+            //increate write count
+            srv_stats.tpcc_dist_total_wr.inc();
+            //increase flush type per write
+            if(bpage->flush_type == BUF_FLUSH_LRU){
+				// ib::info()<<"[write] dist "<<bpage->id.page_no()<<" flush_type: LRU";
+            srv_stats.tpcc_dist_lru_wr.inc();
+            }
+            else if(bpage->flush_type == BUF_FLUSH_LIST){
+				srv_stats.tpcc_dist_cp_wr.inc();
+				// ib::info()<<"[write] dist "<<bpage->id.page_no()<<" flush_type: CP";
+            }
+            else if (bpage->flush_type == BUF_FLUSH_SINGLE_PAGE) {
+				// ib::info()<<"[write] dist "<<bpage->id.page_no()<<" flush_type: SP";
+            	srv_stats.tpcc_dist_sp_wr.inc();
+            }
+        }
+
+        else if ((unsigned)bpage->id.space() == srv_his_space_id){ //history
+            //increate write count
+            srv_stats.tpcc_his_total_wr.inc();
+            //increase flush type per write
+            if(bpage->flush_type == BUF_FLUSH_LRU){
+				// ib::info()<<"[write] his "<<bpage->id.page_no()<<" flush_type: LRU";
+            	srv_stats.tpcc_his_lru_wr.inc();
+            }
+            else if(bpage->flush_type == BUF_FLUSH_LIST){
+				// ib::info()<<"[write] his "<<bpage->id.page_no()<<" flush_type: CP";
+            	srv_stats.tpcc_his_cp_wr.inc();
+            }
+            else if (bpage->flush_type == BUF_FLUSH_SINGLE_PAGE) {
+				// ib::info()<<"[write] his "<<bpage->id.page_no()<<" flush_type: SP";
+            	srv_stats.tpcc_his_sp_wr.inc();
+            }
+        }
+
+        else if ((unsigned)bpage->id.space() == srv_itm_space_id){ //item
+            //increate write count
+            srv_stats.tpcc_itm_total_wr.inc();
+            //increase flush type per write
+            if(bpage->flush_type == BUF_FLUSH_LRU){
+            	srv_stats.tpcc_itm_lru_wr.inc();
+            }
+            else if(bpage->flush_type == BUF_FLUSH_LIST){
+            srv_stats.tpcc_itm_cp_wr.inc();
+            }
+            else if (bpage->flush_type == BUF_FLUSH_SINGLE_PAGE) {
+            srv_stats.tpcc_itm_sp_wr.inc();
+            }
+        }
+
+        else if ((unsigned)bpage->id.space() == srv_no_space_id){ //new orders
+            //increate write count
+            srv_stats.tpcc_no_total_wr.inc();
+            //increase flush type per write
+            if(bpage->flush_type == BUF_FLUSH_LRU){
+				// ib::info()<<"[write] no "<<bpage->id.page_no()<<" flush_type: LRU";
+            srv_stats.tpcc_no_lru_wr.inc();
+            }
+            else if(bpage->flush_type == BUF_FLUSH_LIST){
+				// ib::info()<<"[write] no "<<bpage->id.page_no()<<" flush_type: CP";
+            srv_stats.tpcc_no_cp_wr.inc();
+            }
+            else if (bpage->flush_type == BUF_FLUSH_SINGLE_PAGE) {
+				// ib::info()<<"[write] no "<<bpage->id.page_no()<<" flush_type: SP";
+            srv_stats.tpcc_no_sp_wr.inc();
+            }
+        }
+
+        else if ((unsigned)bpage->id.space() == srv_ol_space_id){ //order_line
+            //increate write count
+            srv_stats.tpcc_ol_total_wr.inc();
+            //increase flush type per write
+            if(bpage->flush_type == BUF_FLUSH_LRU){
+				// ib::info()<<"[write] ol "<<bpage->id.page_no()<<" flush_type: LRU";
+            srv_stats.tpcc_ol_lru_wr.inc();
+            }
+            else if(bpage->flush_type == BUF_FLUSH_LIST){
+				// ib::info()<<"[write] ol "<<bpage->id.page_no()<<" flush_type: CP";
+            srv_stats.tpcc_ol_cp_wr.inc();
+            }
+            else if (bpage->flush_type == BUF_FLUSH_SINGLE_PAGE) {
+				// ib::info()<<"[write] ol "<<bpage->id.page_no()<<" flush_type: SP";
+            srv_stats.tpcc_ol_sp_wr.inc();
+            }
+        }
+
+        else if ((unsigned)bpage->id.space() == srv_or_space_id){ //orders
+            //increate write count
+            srv_stats.tpcc_or_total_wr.inc();
+            //increase flush type per write
+            if(bpage->flush_type == BUF_FLUSH_LRU){
+				// ib::info()<<"[write] or "<<bpage->id.page_no()<<" flush_type: LRU";
+            srv_stats.tpcc_or_lru_wr.inc();
+            }
+            else if(bpage->flush_type == BUF_FLUSH_LIST){
+				// ib::info()<<"[write] or "<<bpage->id.page_no()<<" flush_type: CP";
+            srv_stats.tpcc_or_cp_wr.inc();
+            }
+            else if (bpage->flush_type == BUF_FLUSH_SINGLE_PAGE) {
+				// ib::info()<<"[write] or "<<bpage->id.page_no()<<" flush_type: SP";
+            srv_stats.tpcc_or_sp_wr.inc();
+            }
+        }
+
+        else if ((unsigned)bpage->id.space() == srv_stk_space_id){ //stock
+            //increate write count
+            srv_stats.tpcc_stk_total_wr.inc();
+            //increase flush type per write
+            if(bpage->flush_type == BUF_FLUSH_LRU){
+				// ib::info()<<"[write] stk "<<bpage->id.page_no()<<" flush_type: LRU";
+            srv_stats.tpcc_stk_lru_wr.inc();
+            }
+            else if(bpage->flush_type == BUF_FLUSH_LIST){
+				// ib::info()<<"[write] stk "<<bpage->id.page_no()<<" flush_type: CP";
+            srv_stats.tpcc_stk_cp_wr.inc();
+            }
+            else if (bpage->flush_type == BUF_FLUSH_SINGLE_PAGE) {
+				// ib::info()<<"[write] stk "<<bpage->id.page_no()<<" flush_type: SP";
+            srv_stats.tpcc_stk_sp_wr.inc();
+            }
+        }
+
+        else if ((unsigned)bpage->id.space() == srv_wh_space_id){ //warehouse
+            //increate write count
+            srv_stats.tpcc_wh_total_wr.inc();
+            //increase flush type per write
+            if(bpage->flush_type == BUF_FLUSH_LRU){
+				// ib::info()<<"[write] wh "<<bpage->id.page_no()<<" flush_type: LRU";
+            srv_stats.tpcc_wh_lru_wr.inc();
+            }
+            else if(bpage->flush_type == BUF_FLUSH_LIST){
+				// ib::info()<<"[write] wh "<<bpage->id.page_no()<<" flush_type: CP";
+            srv_stats.tpcc_wh_cp_wr.inc();
+            }
+            else if (bpage->flush_type == BUF_FLUSH_SINGLE_PAGE) {
+				// ib::info()<<"[write] wh "<<bpage->id.page_no()<<" flush_type: SP";
+            srv_stats.tpcc_wh_sp_wr.inc();
+            }
+        }
+
+    if (!srv_use_doublewrite_buf
 	    || buf_dblwr == NULL
 	    || srv_read_only_mode
 	    || fsp_is_system_temporary(bpage->id.space())) {
@@ -1107,7 +1611,7 @@ buf_flush_write_block_low(
 		buf_dblwr_add_to_batch(bpage);
 	}
 
-	/* When doing single page flushing the IO is done synchronously
+    /* When doing single page flushing the IO is done synchronously
 	and we flush the changes to disk only for the tablespace we
 	are working on. */
 	if (sync) {
@@ -1118,6 +1622,7 @@ buf_flush_write_block_low(
 		LRU list as well. */
 		buf_page_io_complete(bpage, true);
 	}
+#endif /* UNIV_WARM_BUF_CACHE */
 
 	/* Increment the counter of I/O operations used
 	for selecting LRU policy. */
@@ -1197,6 +1702,23 @@ buf_flush_page(
 
 		++buf_pool->n_flush[flush_type];
 
+
+#ifdef UNIV_WARM_BUF_CACHE
+        if(flush_type != BUF_FLUSH_LIST){ //cp 제외
+                if (bpage->buf_fix_count == 0 && !bpage->cached_in_warm_buf) { 
+                lsn_t before_lsn = mach_read_from_8(reinterpret_cast<const buf_block_t *>(bpage)->frame + FIL_PAGE_LSN);
+                lsn_t lsn_gap = bpage->oldest_modification - before_lsn;
+
+                /* FIXME: Ad-hoc method */
+                if (0 < lsn_gap  & lsn_gap < 20000000000) {
+					//60000000000
+                //if (0 < lsn_gap && lsn_gap < 500000000) {
+                    bpage->moved_to_warm_buf = true;
+                }
+            }
+        }
+#endif /* UNIV_WARM_BUF_CACHE */
+
 		mutex_exit(block_mutex);
 
 		buf_pool_mutex_exit(buf_pool);
@@ -1209,9 +1731,10 @@ buf_flush_page(
 				/* avoiding deadlock possibility involves
 				doublewrite buffer, should flush it, because
 				it might hold the another block->lock. */
+				
 				buf_dblwr_flush_buffered_writes();
 			} else {
-				buf_dblwr_sync_datafiles();
+				buf_dblwr_sync_datafiles(); //Flush a batch of writes to the datafiles that have already been written to the dblwr buffer on disk. */
 			}
 
 			rw_lock_sx_lock_gen(rw_lock, BUF_IO_WRITE);
@@ -1236,6 +1759,7 @@ buf_flush_page(
 		buffer pool or removed from flush_list or LRU_list. */
 
 		buf_flush_write_block_low(bpage, flush_type, sync);
+		
 	}
 
 	return(flush);
@@ -1560,8 +2084,7 @@ ulint
 buf_free_from_unzip_LRU_list_batch(
 /*===============================*/
 	buf_pool_t*	buf_pool,	/*!< in: buffer pool instance */
-	ulint		max)		/*!< in: desired number of
-					blocks in the free_list */
+	ulint		max)		/*!< in: desired number of	blocks in the free_list */
 {
 	ulint		scanned = 0;
 	ulint		count = 0;
@@ -1618,8 +2141,108 @@ ulint
 buf_flush_LRU_list_batch(
 /*=====================*/
 	buf_pool_t*	buf_pool,	/*!< in: buffer pool instance */
-	ulint		max)		/*!< in: desired number of
-					blocks in the free_list */
+	ulint		max)		/*!< in: desired number of blocks in the free_list */
+{
+	buf_page_t*	bpage;
+	ulint		scanned = 0;
+	ulint		evict_count = 0;
+	ulint		count = 0;
+	ulint		free_len = UT_LIST_GET_LEN(buf_pool->free);
+	ulint		lru_len = UT_LIST_GET_LEN(buf_pool->LRU);
+	ulint		withdraw_depth = 0;
+
+	ut_ad(buf_pool_mutex_own(buf_pool));
+
+	if (buf_pool->curr_size < buf_pool->old_size
+	    && buf_pool->withdraw_target > 0) {
+		withdraw_depth = buf_pool->withdraw_target
+				 - UT_LIST_GET_LEN(buf_pool->withdraw);
+	}
+
+	for (bpage = UT_LIST_GET_LAST(buf_pool->LRU);
+	     bpage != NULL && count + evict_count < max
+	     && free_len < srv_LRU_scan_depth + withdraw_depth
+	     && lru_len > BUF_LRU_MIN_LEN;
+	     ++scanned,
+	     bpage = buf_pool->lru_hp.get()) {
+
+		buf_page_t* prev = UT_LIST_GET_PREV(LRU, bpage);
+		buf_pool->lru_hp.set(prev);
+
+		BPageMutex*	block_mutex = buf_page_get_mutex(bpage);
+
+		mutex_enter(block_mutex);
+
+		if (buf_flush_ready_for_replace(bpage)) {
+			/* block is ready for eviction i.e., it is
+			clean and is not IO-fixed or buffer fixed. */
+			mutex_exit(block_mutex);
+			if (buf_LRU_free_page(bpage, true)) {
+				++evict_count;
+			}
+		} else if (buf_flush_ready_for_flush(bpage, BUF_FLUSH_LRU)) {
+			/* Block is ready for flush. Dispatch an IO
+			request. The IO helper thread will put it on
+			free list in IO completion routine. */
+			mutex_exit(block_mutex);
+			buf_flush_page_and_try_neighbors(
+				bpage, BUF_FLUSH_LRU, max, &count); ///
+		} else {
+			/* Can't evict or dispatch this block. Go to
+			previous. */
+			ut_ad(buf_pool->lru_hp.is_hp(prev));
+			mutex_exit(block_mutex);
+		}
+
+		ut_ad(!mutex_own(block_mutex));
+		ut_ad(buf_pool_mutex_own(buf_pool));
+
+		free_len = UT_LIST_GET_LEN(buf_pool->free);
+		lru_len = UT_LIST_GET_LEN(buf_pool->LRU);
+	}
+
+	buf_pool->lru_hp.set(NULL);
+
+	/* We keep track of all flushes happening as part of LRU
+	flush. When estimating the desired rate at which flush_list
+	should be flushed, we factor in this value. */
+	buf_lru_flush_page_count += count;
+
+	ut_ad(buf_pool_mutex_own(buf_pool));
+
+	if (evict_count) {
+		MONITOR_INC_VALUE_CUMULATIVE(
+			MONITOR_LRU_BATCH_EVICT_TOTAL_PAGE,
+			MONITOR_LRU_BATCH_EVICT_COUNT,
+			MONITOR_LRU_BATCH_EVICT_PAGES,
+			evict_count);
+	}
+
+	if (scanned) {
+		MONITOR_INC_VALUE_CUMULATIVE(
+			MONITOR_LRU_BATCH_SCANNED,
+			MONITOR_LRU_BATCH_SCANNED_NUM_CALL,
+			MONITOR_LRU_BATCH_SCANNED_PER_CALL,
+			scanned);
+	}
+
+	return(count);
+}
+
+#ifdef UNIV_WARM_BUF_CACHE
+/*******************************************************************//**
+This utility flushes dirty blocks from the end of the LRU list.
+The calling thread is not allowed to own any latches on pages!
+It attempts to make 'max' blocks available in the free list. Note that
+it is a best effort attempt and it is not guaranteed that after a call
+to this function there will be 'max' blocks in the free list.
+@return number of blocks for which the write request was queued. */
+static
+ulint
+warm_buf_flush_LRU_list_batch(
+/*=====================*/
+	buf_pool_t*	buf_pool,	/*!< in: buffer pool instance */
+	ulint		max)		/*!< in: desired number of blocks in the free_list */
 {
 	buf_page_t*	bpage;
 	ulint		scanned = 0;
@@ -1685,28 +2308,11 @@ buf_flush_LRU_list_batch(
 	flush. When estimating the desired rate at which flush_list
 	should be flushed, we factor in this value. */
 	buf_lru_flush_page_count += count;
-
 	ut_ad(buf_pool_mutex_own(buf_pool));
-
-	if (evict_count) {
-		MONITOR_INC_VALUE_CUMULATIVE(
-			MONITOR_LRU_BATCH_EVICT_TOTAL_PAGE,
-			MONITOR_LRU_BATCH_EVICT_COUNT,
-			MONITOR_LRU_BATCH_EVICT_PAGES,
-			evict_count);
-	}
-
-	if (scanned) {
-		MONITOR_INC_VALUE_CUMULATIVE(
-			MONITOR_LRU_BATCH_SCANNED,
-			MONITOR_LRU_BATCH_SCANNED_NUM_CALL,
-			MONITOR_LRU_BATCH_SCANNED_PER_CALL,
-			scanned);
-	}
 
 	return(count);
 }
-
+#endif /*UNIV_WARM_BUF_CACHE*/
 /*******************************************************************//**
 Flush and move pages from LRU or unzip_LRU list to the free list.
 Whether LRU or unzip_LRU is used depends on the state of the system.
@@ -1718,8 +2324,7 @@ ulint
 buf_do_LRU_batch(
 /*=============*/
 	buf_pool_t*	buf_pool,	/*!< in: buffer pool instance */
-	ulint		max)		/*!< in: desired number of
-					blocks in the free_list */
+	ulint		max)		/*!< in: desired number of blocks in the free_list */
 {
 	ulint	count = 0;
 
@@ -1727,9 +2332,21 @@ buf_do_LRU_batch(
 		count += buf_free_from_unzip_LRU_list_batch(buf_pool, max);
 	}
 
+#ifdef UNIV_WARM_BUF_CACHE
+	if (max > count) {
+		if (buf_pool_index(buf_pool) < srv_buf_pool_instances){
+			count += buf_flush_LRU_list_batch(buf_pool, max - count);
+		}
+		else {
+			count += warm_buf_flush_LRU_list_batch(buf_pool, max-count);
+		}
+	}
+#else
+
 	if (max > count) {
 		count += buf_flush_LRU_list_batch(buf_pool, max - count);
 	}
+#endif /*UNIV_WARM_BUF_CACHE*/
 
 	return(count);
 }
@@ -1818,6 +2435,60 @@ buf_do_flush_list_batch(
 	return(count);
 }
 
+#ifdef UNIV_WARM_BUF_CACHE
+static
+ulint
+warm_buf_do_flush_list_batch(
+	buf_pool_t*		buf_pool,
+	ulint			min_n,
+	lsn_t			lsn_limit)
+{
+	ulint		count = 0;
+	ulint		scanned = 0;
+
+	ut_ad(buf_pool_mutex_own(buf_pool));
+
+	/* Start from the end of the list looking for a suitable
+	block to be flushed. */
+	buf_flush_list_mutex_enter(buf_pool);
+	ulint len = UT_LIST_GET_LEN(buf_pool->flush_list);
+
+	/* In order not to degenerate this scan to O(n*n) we attempt
+	to preserve pointer of previous block in the flush list. To do
+	so we declare it a hazard pointer. Any thread working on the
+	flush list must check the hazard pointer and if it is removing
+	the same block then it must reset it. */
+	for (buf_page_t* bpage = UT_LIST_GET_LAST(buf_pool->flush_list);
+	     count < min_n && bpage != NULL && len > 0
+	     && bpage->oldest_modification < lsn_limit;
+	     bpage = buf_pool->flush_hp.get(),
+	     ++scanned) {
+
+		buf_page_t*	prev;
+
+		ut_a(bpage->oldest_modification > 0);
+		ut_ad(bpage->in_flush_list);
+
+		prev = UT_LIST_GET_PREV(list, bpage);
+		buf_pool->flush_hp.set(prev);
+		buf_flush_list_mutex_exit(buf_pool);
+		buf_flush_page_and_try_neighbors(
+			bpage, BUF_FLUSH_LIST, min_n, &count);
+
+		buf_flush_list_mutex_enter(buf_pool);
+
+		ut_ad(flushed || buf_pool->flush_hp.is_hp(prev));
+
+		--len;
+	}
+
+	buf_pool->flush_hp.set(NULL);
+	buf_flush_list_mutex_exit(buf_pool);
+	ut_ad(buf_pool_mutex_own(buf_pool));
+
+	return(count);
+}
+#endif /*UNIV_WARM_BUF_CACHE*/
 /** This utility flushes dirty blocks from the end of the LRU list or
 flush_list.
 NOTE 1: in the case of an LRU flush the calling thread may own latches to
@@ -1860,10 +2531,28 @@ buf_flush_batch(
 	the flush functions. */
 	switch (flush_type) {
 	case BUF_FLUSH_LRU:
-		count = buf_do_LRU_batch(buf_pool, min_n);
+		if (buf_pool_index(buf_pool) < srv_buf_pool_instances){
+			count = buf_do_LRU_batch(buf_pool, min_n);
+			// ib::info()<<"[ky] <<normal>> LRU count: "<<count<<" min_n: "<<min_n;
+		}
+#ifdef UNIV_WARM_BUF_CACHE
+		else{
+			count = buf_do_LRU_batch(buf_pool, min_n);
+			// ib::info()<<"[ky] <<warm>> LRU count: "<<count<<" min_n: "<<min_n;
+		}
+#endif/*UNIV_WARM_BUF_CACHE*/
 		break;
 	case BUF_FLUSH_LIST:
-		count = buf_do_flush_list_batch(buf_pool, min_n, lsn_limit);
+		if (buf_pool_index(buf_pool) < srv_buf_pool_instances){
+			count = buf_do_flush_list_batch(buf_pool, min_n, lsn_limit);
+			// ib::info()<<"[ky] <<normal>> flush list count: "<<count<<" min_n: "<<min_n<<" lsn_limit: "<<lsn_limit;
+		}
+#ifdef UNIV_WARM_BUF_CACHE
+		else{
+			count = warm_buf_do_flush_list_batch(buf_pool, min_n, lsn_limit);
+			// ib::info()<<"[ky] <<warm>> flush list count: "<<count<<" min_n: "<<min_n<<" lsn_limit: "<<lsn_limit;
+		}
+#endif/*UNIV_WARM_BUF_CACHE*/
 		break;
 	default:
 		ut_error;
@@ -1904,8 +2593,7 @@ ibool
 buf_flush_start(
 /*============*/
 	buf_pool_t*	buf_pool,	/*!< buffer pool instance */
-	buf_flush_t	flush_type)	/*!< in: BUF_FLUSH_LRU
-					or BUF_FLUSH_LIST */
+	buf_flush_t	flush_type)	/*!< in: BUF_FLUSH_LRU or BUF_FLUSH_LIST */
 {
 	ut_ad(flush_type == BUF_FLUSH_LRU || flush_type == BUF_FLUSH_LIST);
 
@@ -1937,8 +2625,7 @@ void
 buf_flush_end(
 /*==========*/
 	buf_pool_t*	buf_pool,	/*!< buffer pool instance */
-	buf_flush_t	flush_type)	/*!< in: BUF_FLUSH_LRU
-					or BUF_FLUSH_LIST */
+	buf_flush_t	flush_type)	/*!< in: BUF_FLUSH_LRU or BUF_FLUSH_LIST */
 {
 	buf_pool_mutex_enter(buf_pool);
 
@@ -1968,8 +2655,7 @@ void
 buf_flush_wait_batch_end(
 /*=====================*/
 	buf_pool_t*	buf_pool,	/*!< buffer pool instance */
-	buf_flush_t	type)		/*!< in: BUF_FLUSH_LRU
-					or BUF_FLUSH_LIST */
+	buf_flush_t	type)		/*!< in: BUF_FLUSH_LRU or BUF_FLUSH_LIST */
 {
 	ut_ad(type == BUF_FLUSH_LRU || type == BUF_FLUSH_LIST);
 
@@ -2020,7 +2706,9 @@ buf_flush_do_batch(
 	}
 
 	if (!buf_flush_start(buf_pool, type)) {
+        ib::info() << "fail.." << type <<" "<< buf_pool->n_flush[type] << " " << buf_pool->init_flush[type] << " in " << buf_pool->instance_no; 
 		return(false);
+
 	}
 
 	ulint	page_count = buf_flush_batch(buf_pool, type, min_n, lsn_limit);
@@ -2358,7 +3046,7 @@ the buffer pool.
 @return percent of io_capacity to flush to manage dirty page ratio */
 static
 ulint
-af_get_pct_for_dirty()
+af_get_pct_for_dirty() 
 /*==================*/
 {
 	double	dirty_pct = buf_get_modified_ratio_pct();
@@ -2636,9 +3324,18 @@ page_cleaner_flush_pages_recommendation(
 
 	n_pages = (PCT_IO(pct_total) + avg_page_rate + pages_for_lsn) / 3;
 
+	
+#ifdef UNIV_WARM_BUF_CACHE
+	if (n_pages > (srv_max_io_capacity * (2.0/3.0))){ //FIXME : normal buf / total buf
+		n_pages = (srv_max_io_capacity * (2.0/3.0));
+	}
+#else
 	if (n_pages > srv_max_io_capacity) {
 		n_pages = srv_max_io_capacity;
 	}
+#endif /*UNIV_WARM_BUF_CACHE*/
+
+
 
 	/* Normalize request for each instance */
 	mutex_enter(&page_cleaner->mutex);
@@ -2730,6 +3427,7 @@ buf_flush_page_cleaner_init(void)
 	page_cleaner->is_running = true;
 }
 
+
 /**
 Close page_cleaner. */
 static
@@ -2752,6 +3450,7 @@ buf_flush_page_cleaner_close(void)
 
 	page_cleaner = NULL;
 }
+
 
 /**
 Requests for all slots to flush all buffer pool instances.
@@ -3095,6 +3794,8 @@ buf_flush_page_cleaner_disabled_debug_update(
 }
 #endif /* UNIV_DEBUG */
 
+
+
 /******************************************************************//**
 page_cleaner thread tasked with flushing dirty pages from the buffer
 pools. As of now we'll have only one coordinator.
@@ -3273,6 +3974,7 @@ DECLARE_THREAD(buf_flush_page_cleaner_coordinator)(
 			ulint	n_flushed_lru = 0;
 			ulint	n_flushed_list = 0;
 			pc_wait_finished(&n_flushed_lru, &n_flushed_list);
+			// ib::info()<<"[ky] <<normal 1>> n_flushed_lru: "<<n_flushed_lru<<" n_flushed_list: "<<n_flushed_list;
 
 			if (n_flushed_list > 0 || n_flushed_lru > 0) {
 				buf_flush_stats(n_flushed_list, n_flushed_lru);
@@ -3299,6 +4001,7 @@ DECLARE_THREAD(buf_flush_page_cleaner_coordinator)(
 			} else {
 				n_to_flush = 0;
 			}
+			// ib::info()<<"[ky] <<normal>> n_to_flush: "<<n_to_flush;
 
 			/* Request flushing for threads */
 			pc_request(n_to_flush, lsn_limit);
@@ -3320,6 +4023,7 @@ DECLARE_THREAD(buf_flush_page_cleaner_coordinator)(
 			ulint	n_flushed_list = 0;
 
 			pc_wait_finished(&n_flushed_lru, &n_flushed_list);
+			
 
 			if (n_flushed_list > 0 || n_flushed_lru > 0) {
 				buf_flush_stats(n_flushed_list, n_flushed_lru);
@@ -3333,6 +4037,7 @@ DECLARE_THREAD(buf_flush_page_cleaner_coordinator)(
 			n_flushed_last += n_flushed_list;
 
 			n_flushed = n_flushed_lru + n_flushed_list;
+			// ib::info()<<"[ky] <<normal 2>> n_flushed_lru: "<<n_flushed_lru<<" n_flushed_list: "<<n_flushed_list;
 
 			if (n_flushed_lru) {
 				MONITOR_INC_VALUE_CUMULATIVE(
@@ -3362,7 +4067,6 @@ DECLARE_THREAD(buf_flush_page_cleaner_coordinator)(
 					MONITOR_FLUSH_BACKGROUND_COUNT,
 					MONITOR_FLUSH_BACKGROUND_PAGES,
 					n_flushed);
-
 			}
 
 		} else {
@@ -3847,3 +4551,1050 @@ FlushObserver::flush()
 		}
 	}
 }
+
+/***/
+#ifdef UNIV_WARM_BUF_CACHE
+
+/*Initialize page_cleaner. */
+void
+warm_buf_flush_page_cleaner_init(void)
+/*=============================*/
+{
+	ut_ad(warm_buf_page_cleaner == NULL);
+
+	warm_buf_page_cleaner = static_cast<page_cleaner_t*>(
+		ut_zalloc_nokey(sizeof(*warm_buf_page_cleaner)));
+
+	mutex_create(LATCH_ID_PAGE_CLEANER, &warm_buf_page_cleaner->mutex);
+
+	warm_buf_page_cleaner->is_requested = os_event_create("pc_is_requested");
+	warm_buf_page_cleaner->is_finished = os_event_create("pc_is_finished");
+
+	warm_buf_page_cleaner->n_slots = static_cast<ulint>(srv_warm_buf_pool_instances); //FIXME
+	ib::info()<<"Warm Buffer Number of Slots: "<<warm_buf_page_cleaner->n_slots;
+ 
+	warm_buf_page_cleaner->slots = static_cast<page_cleaner_slot_t*>(
+		ut_zalloc_nokey(warm_buf_page_cleaner->n_slots
+				* sizeof(*warm_buf_page_cleaner->slots)));
+
+	ut_d(warm_buf_page_cleaner->n_disabled_debug = 0);
+
+	warm_buf_page_cleaner->is_running = true;
+}
+
+static void 
+warm_buf_flush_page_cleaner_close(void)
+{
+	ib::info()<<"[ky] close page cleaner";
+	/* waiting for all worker threads exit */
+	while (warm_buf_page_cleaner->n_workers > 0) {
+		os_thread_sleep(10000);
+	}
+
+	mutex_destroy(&warm_buf_page_cleaner->mutex);
+
+	ut_free(warm_buf_page_cleaner->slots);
+
+	os_event_destroy(warm_buf_page_cleaner->is_finished);
+	os_event_destroy(warm_buf_page_cleaner->is_requested);
+
+	ut_free(warm_buf_page_cleaner);
+
+	warm_buf_page_cleaner = NULL;
+}
+
+/**
+Do flush for one slot.
+@return	the number of the slots which has not been treated yet. */
+static
+ulint
+warm_buf_pc_flush_slot(void)
+{
+	ib_time_monotonic_ms_t	lru_tm = 0;
+	ib_time_monotonic_ms_t	list_tm = 0;
+	int	lru_pass = 0;
+	int	list_pass = 0;
+
+	mutex_enter(&warm_buf_page_cleaner->mutex);
+
+	if (warm_buf_page_cleaner->n_slots_requested > 0) {
+		page_cleaner_slot_t*	slot = NULL;
+		ulint			i;
+
+		for (i = 0; i < warm_buf_page_cleaner->n_slots; i++) {
+			slot = &warm_buf_page_cleaner->slots[i];
+
+			if (slot->state == PAGE_CLEANER_STATE_REQUESTED) {
+				break;
+			}
+		}
+
+		/* slot should be found because
+		page_cleaner->n_slots_requested > 0 */
+		ut_a(i < warm_buf_page_cleaner->n_slots);
+
+		buf_pool_t* warm_buf_pool = buf_pool_from_array(srv_buf_pool_instances + i);
+
+		warm_buf_page_cleaner->n_slots_requested--;
+		warm_buf_page_cleaner->n_slots_flushing++;
+		slot->state = PAGE_CLEANER_STATE_FLUSHING;
+
+		if (warm_buf_page_cleaner->n_slots_requested == 0) {
+			os_event_reset(warm_buf_page_cleaner->is_requested);
+		}
+
+		if (!warm_buf_page_cleaner->is_running) {
+			slot->n_flushed_lru = 0;
+			slot->n_flushed_list = 0;
+			goto finish_mutex;
+		}
+
+		mutex_exit(&warm_buf_page_cleaner->mutex);
+
+		lru_tm = ut_time_monotonic_ms();
+
+		/* Flush pages from end of LRU if required */
+		slot->n_flushed_lru = buf_flush_LRU_list(warm_buf_pool);
+
+		lru_tm = ut_time_monotonic_ms() - lru_tm;
+		lru_pass++;
+
+		if (!warm_buf_page_cleaner->is_running) {
+			slot->n_flushed_list = 0;
+			goto finish;
+		}
+
+		/* Flush pages from flush_list if required */
+		if (warm_buf_page_cleaner->requested) {
+
+			list_tm = ut_time_monotonic_ms();
+
+			slot->succeeded_list = buf_flush_do_batch(
+				warm_buf_pool, BUF_FLUSH_LIST,
+				slot->n_pages_requested,
+				warm_buf_page_cleaner->lsn_limit,
+				&slot->n_flushed_list);
+
+			list_tm = ut_time_monotonic_ms() - list_tm;
+			list_pass++;
+		} else {
+			slot->n_flushed_list = 0;
+			slot->succeeded_list = true;
+		}
+finish:
+		mutex_enter(&warm_buf_page_cleaner->mutex);
+finish_mutex:
+		warm_buf_page_cleaner->n_slots_flushing--;
+		warm_buf_page_cleaner->n_slots_finished++;
+		slot->state = PAGE_CLEANER_STATE_FINISHED;
+
+		slot->flush_lru_time += lru_tm;
+		slot->flush_list_time += list_tm;
+		slot->flush_lru_pass += lru_pass;
+		slot->flush_list_pass += list_pass;
+
+		if (warm_buf_page_cleaner->n_slots_requested == 0
+		    && warm_buf_page_cleaner->n_slots_flushing == 0) {
+			os_event_set(warm_buf_page_cleaner->is_finished);
+		}
+	}
+
+	ulint	ret = warm_buf_page_cleaner->n_slots_requested;
+
+	mutex_exit(&warm_buf_page_cleaner->mutex);
+
+	return(ret);
+}
+
+
+/******************************************************************//**
+Worker thread of page_cleaner.
+@return a dummy parameter */
+extern "C"
+os_thread_ret_t
+DECLARE_THREAD(warm_buf_flush_page_cleaner_worker)(
+/*==========================================*/
+	void*	arg MY_ATTRIBUTE((unused)))
+			/*!< in: a dummy parameter required by
+			os_thread_create */
+{
+	my_thread_init();
+
+	mutex_enter(&warm_buf_page_cleaner->mutex);
+	warm_buf_page_cleaner->n_workers++;
+	mutex_exit(&warm_buf_page_cleaner->mutex);
+
+	while (true) {
+		os_event_wait(warm_buf_page_cleaner->is_requested);
+
+		// ut_d(buf_flush_page_cleaner_disabled_loop());
+
+		if (!warm_buf_page_cleaner->is_running) {
+			break;
+		}
+
+		warm_buf_pc_flush_slot();
+	}
+
+	mutex_enter(&warm_buf_page_cleaner->mutex);
+	warm_buf_page_cleaner->n_workers--;
+	mutex_exit(&warm_buf_page_cleaner->mutex);
+
+	my_thread_end();
+
+	os_thread_exit();
+
+	OS_THREAD_DUMMY_RETURN;
+}
+/**
+Requests for all slots to flush all buffer pool instances.
+@param min_n	wished minimum mumber of blocks flushed
+		(it is not guaranteed that the actual number is that big)
+@param lsn_limit in the case BUF_FLUSH_LIST all blocks whose
+		oldest_modification is smaller than this should be flushed
+		(if their number does not exceed min_n), otherwise ignored
+*/
+static
+void
+warm_buf_pc_request(
+	ulint		min_n,
+	lsn_t		lsn_limit)
+{
+	if (min_n != ULINT_MAX) {
+		/* Ensure that flushing is spread evenly amongst the
+		buffer pool instances. When min_n is ULINT_MAX
+		we need to flush everything up to the lsn limit
+		so no limit here. */
+		min_n = (min_n + srv_warm_buf_pool_instances - 1)
+			/ srv_warm_buf_pool_instances;
+	}
+
+	mutex_enter(&warm_buf_page_cleaner->mutex);
+
+	ut_ad(warm_buf_page_cleaner->n_slots_requested == 0);
+	ut_ad(warm_buf_page_cleaner->n_slots_flushing == 0);
+	ut_ad(warm_buf_page_cleaner->n_slots_finished == 0);
+
+	warm_buf_page_cleaner->requested = (min_n > 0);
+	warm_buf_page_cleaner->lsn_limit = lsn_limit;
+
+	for (ulint i = 0; i < warm_buf_page_cleaner->n_slots; i++) {
+		page_cleaner_slot_t* slot = &warm_buf_page_cleaner->slots[i];
+
+		ut_ad(slot->state == PAGE_CLEANER_STATE_NONE);
+
+		if (min_n == ULINT_MAX) {
+			slot->n_pages_requested = ULINT_MAX;
+		} else if (min_n == 0) {
+			slot->n_pages_requested = 0;
+		}
+
+		/* slot->n_pages_requested was already set by
+		page_cleaner_flush_pages_recommendation() */
+
+		slot->state = PAGE_CLEANER_STATE_REQUESTED;
+	}
+
+	warm_buf_page_cleaner->n_slots_requested = warm_buf_page_cleaner->n_slots;
+	warm_buf_page_cleaner->n_slots_flushing = 0;
+	warm_buf_page_cleaner->n_slots_finished = 0;
+
+	os_event_set(warm_buf_page_cleaner->is_requested);
+
+	mutex_exit(&warm_buf_page_cleaner->mutex);
+}
+
+
+
+/**
+Wait until all flush requests are finished.
+@param n_flushed_lru	number of pages flushed from the end of the LRU list.
+@param n_flushed_list	number of pages flushed from the end of the
+			flush_list.
+@return			true if all flush_list flushing batch were success. */
+static
+bool
+warm_buf_pc_wait_finished(
+	ulint*	n_flushed_lru,
+	ulint*	n_flushed_list)
+{
+	bool	all_succeeded = true;
+
+	*n_flushed_lru = 0;
+	*n_flushed_list = 0;
+
+	os_event_wait(warm_buf_page_cleaner->is_finished);
+
+	mutex_enter(&warm_buf_page_cleaner->mutex);
+
+	ut_ad(warm_buf_page_cleaner->n_slots_requested == 0);
+	ut_ad(warm_buf_page_cleaner->n_slots_flushing == 0);
+	ut_ad(warm_buf_page_cleaner->n_slots_finished == warm_buf_page_cleaner->n_slots);
+
+	for (ulint i = 0; i < warm_buf_page_cleaner->n_slots; i++) {
+		page_cleaner_slot_t* slot = &warm_buf_page_cleaner->slots[i];
+
+		ut_ad(slot->state == PAGE_CLEANER_STATE_FINISHED);
+
+		*n_flushed_lru += slot->n_flushed_lru;
+		*n_flushed_list += slot->n_flushed_list;
+		all_succeeded &= slot->succeeded_list;
+
+		slot->state = PAGE_CLEANER_STATE_NONE;
+
+		slot->n_pages_requested = 0;
+	}
+
+	warm_buf_page_cleaner->n_slots_finished = 0;
+
+	os_event_reset(warm_buf_page_cleaner->is_finished);
+
+	mutex_exit(&warm_buf_page_cleaner->mutex);
+
+	return(all_succeeded);
+}
+
+bool
+warm_buf_flush_lists(
+	ulint			min_n,
+	lsn_t			lsn_limit,
+	ulint*			n_processed)
+{
+	ulint		i;
+	ulint		n_flushed = 0;
+	bool		success = true;
+
+	if (n_processed) {
+		*n_processed = 0;
+	}
+
+	if (min_n != ULINT_MAX) {
+		/* Ensure that flushing is spread evenly amongst the
+		buffer pool instances. When min_n is ULINT_MAX
+		we need to flush everything up to the lsn limit
+		so no limit here. */
+		min_n = (min_n + srv_warm_buf_pool_instances - 1)
+			 / srv_warm_buf_pool_instances;
+	}
+
+	/* Flush to lsn_limit in all buffer pool instances */
+	for (i = 0; i < srv_warm_buf_pool_instances; i++) {
+		buf_pool_t*	buf_pool;
+		ulint		page_count = 0;
+
+		buf_pool = buf_pool_from_array(srv_buf_pool_instances+i);
+
+		if (!buf_flush_do_batch(buf_pool,
+					BUF_FLUSH_LIST,
+					min_n,
+					lsn_limit,
+					&page_count)) {
+			/* We have two choices here. If lsn_limit was
+			specified then skipping an instance of buffer
+			pool means we cannot guarantee that all pages
+			up to lsn_limit has been flushed. We can
+			return right now with failure or we can try
+			to flush remaining buffer pools up to the
+			lsn_limit. We attempt to flush other buffer
+			pools based on the assumption that it will
+			help in the retry which will follow the
+			failure. */
+			success = false;
+
+			continue;
+		}
+
+		n_flushed += page_count;
+	}
+
+	if (n_flushed) {
+		buf_flush_stats(n_flushed, 0);
+	}
+
+	if (n_processed) {
+		*n_processed = n_flushed;
+	}
+
+	return(success);
+}
+/*Waits until a flush batch of the given type ends */
+void
+warm_buf_flush_wait_batch_end(
+/*=====================*/
+	buf_pool_t*	buf_pool,	/*!< buffer pool instance */
+	buf_flush_t	type)		/*!< in: BUF_FLUSH_LRU
+					or BUF_FLUSH_LIST */
+{
+	ut_ad(type == BUF_FLUSH_LRU || type == BUF_FLUSH_LIST);
+
+	if (buf_pool == NULL) {
+		ulint	i;
+
+		for (i = 0; i < srv_warm_buf_pool_instances; ++i) {
+			buf_pool_t*	buf_pool;
+
+			buf_pool = buf_pool_from_array(srv_buf_pool_instances + i);
+
+			thd_wait_begin(NULL, THD_WAIT_DISKIO);
+			os_event_wait(buf_pool->no_flush[type]);
+			thd_wait_end(NULL);
+		}
+	} else {
+		thd_wait_begin(NULL, THD_WAIT_DISKIO);
+		os_event_wait(buf_pool->no_flush[type]);
+		thd_wait_end(NULL);
+	}
+}
+/**/
+
+void
+warm_buf_flush_wait_LRU_batch_end(void)
+/*==============================*/
+{
+	for (ulint i = 0; i < srv_warm_buf_pool_instances; i++) {
+		buf_pool_t*	buf_pool;
+
+		buf_pool = buf_pool_from_array(srv_buf_pool_instances + i);
+
+		buf_pool_mutex_enter(buf_pool);
+
+		if (buf_pool->n_flush[BUF_FLUSH_LRU] > 0
+		   || buf_pool->init_flush[BUF_FLUSH_LRU]) {
+
+			buf_pool_mutex_exit(buf_pool);
+			warm_buf_flush_wait_batch_end(buf_pool, BUF_FLUSH_LRU);
+		} else {
+			buf_pool_mutex_exit(buf_pool);
+		}
+	}
+}
+
+/*********************************************************************//**
+Puts the Warm Buf page_cleaner thread to sleep if it has finished work in less
+than a second
+@retval 0 wake up by event set,
+@retval OS_SYNC_TIME_EXCEEDED if timeout was exceeded
+@param next_loop_time	time when next loop iteration should start
+@param sig_count	zero or the value returned by previous call of
+			os_event_reset() */
+// static
+// ulint
+// warm_buf_pc_sleep_if_needed(
+// /*===============*/
+// 	ulint		next_loop_time,
+// 	int64_t		sig_count,
+//     os_event_t  event)
+// {
+// 	ulint	cur_time = ut_time_monotonic_ms();
+
+// 	if (next_loop_time > cur_time) {
+// 		/* Get sleep interval in micro seconds. We use
+// 		ut_min() to avoid long sleep in case of wrap around. */
+// 		ulint	sleep_us;
+
+// 		sleep_us = ut_min(static_cast<ulint>(1000000),
+// 				  (next_loop_time - cur_time) * 1000);
+
+// 		return(os_event_wait_time_low(event,
+// 					      sleep_us, sig_count));
+// 	}
+
+// 	return(OS_SYNC_TIME_EXCEEDED);
+// }
+
+static
+ulint
+warm_buf_pc_sleep_if_needed(
+/*===============*/
+	ib_time_monotonic_ms_t		next_loop_time,
+	int64_t		sig_count)
+{
+	ib_time_monotonic_ms_t	cur_time = ut_time_monotonic_ms();
+
+	if (next_loop_time > cur_time) {
+		/* Get sleep interval in micro seconds. We use
+		ut_min() to avoid long sleep in case of wrap around. */
+		int64_t sleep_us;
+
+		sleep_us = ut_min(int64_t(1000000),
+			         (next_loop_time - cur_time) * int64_t(1000));
+		ut_a(sleep_us > 0);
+
+		return(os_event_wait_time_low(warm_buf_flush_event,
+					      sleep_us, sig_count));
+	}
+
+	return(OS_SYNC_TIME_EXCEEDED);
+}
+
+
+static
+ulint
+warm_buf_page_cleaner_flush_pages_recommendation(
+/*====================================*/
+	lsn_t*	lsn_limit,
+	ulint	last_pages_in)
+{
+	static	lsn_t		prev_lsn = 0;
+	static	ulint		sum_pages = 0;
+	static	ulint		avg_page_rate = 0;
+	static	ulint		n_iterations = 0;
+	static	ib_time_monotonic_t		prev_time;
+	lsn_t			oldest_lsn;
+	lsn_t			cur_lsn;
+	lsn_t			age;
+	lsn_t			lsn_rate;
+	ulint			n_pages = 0;
+	ulint			pct_for_dirty = 0;
+	ulint			pct_for_lsn = 0;
+	ulint			pct_total = 0;
+
+	cur_lsn = log_get_lsn();
+
+	if (prev_lsn == 0) {
+		/* First time around. */
+		prev_lsn = cur_lsn;
+		prev_time = ut_time_monotonic();
+		return(0);
+	}
+
+	if (prev_lsn == cur_lsn) {
+		return(0);
+	}
+
+	sum_pages += last_pages_in;
+
+	ib_time_monotonic_t	curr_time    = ut_time_monotonic();
+	uint64_t	        time_elapsed = curr_time - prev_time;
+	const ulong             avg_loop     = srv_flushing_avg_loops;
+
+	/* We update our variables every srv_flushing_avg_loops
+	iterations to smooth out transition in workload. */
+	if (++n_iterations >= avg_loop
+	    || time_elapsed >= (uint64_t)avg_loop) {
+
+		if (time_elapsed < 1) {
+			time_elapsed = 1;
+		}
+
+		avg_page_rate = static_cast<ulint>(
+			((static_cast<double>(sum_pages)
+			  / time_elapsed)
+			 + avg_page_rate) / 2);
+
+		/* How much LSN we have generated since last call. */
+		lsn_rate = static_cast<lsn_t>(
+			static_cast<double>(cur_lsn - prev_lsn)
+			/ time_elapsed);
+
+		lsn_avg_rate = (lsn_avg_rate + lsn_rate) / 2;
+
+
+		/* aggregate stats of all slots */
+		mutex_enter(&warm_buf_page_cleaner->mutex);
+
+		uint64_t  flush_tm = warm_buf_page_cleaner->flush_time;
+		ulint	flush_pass = warm_buf_page_cleaner->flush_pass;
+
+		warm_buf_page_cleaner->flush_time = 0;
+		warm_buf_page_cleaner->flush_pass = 0;
+
+		uint64_t lru_tm = 0;
+		uint64_t list_tm = 0;
+		ulint	lru_pass = 0;
+		ulint	list_pass = 0;
+
+		for (ulint i = 0; i < warm_buf_page_cleaner->n_slots; i++) {
+			page_cleaner_slot_t*	slot;
+
+			slot = &warm_buf_page_cleaner->slots[i];
+
+			lru_tm    += slot->flush_lru_time;
+			lru_pass  += slot->flush_lru_pass;
+			list_tm   += slot->flush_list_time;
+			list_pass += slot->flush_list_pass;
+
+			slot->flush_lru_time  = 0;
+			slot->flush_lru_pass  = 0;
+			slot->flush_list_time = 0;
+			slot->flush_list_pass = 0;
+		}
+
+		mutex_exit(&warm_buf_page_cleaner->mutex);
+
+		/* minimum values are 1, to avoid dividing by zero. */
+		if (lru_tm < 1) {
+			lru_tm = 1;
+		}
+		if (list_tm < 1) {
+			list_tm = 1;
+		}
+		if (flush_tm < 1) {
+			flush_tm = 1;
+		}
+
+		if (lru_pass < 1) {
+			lru_pass = 1;
+		}
+		if (list_pass < 1) {
+			list_pass = 1;
+		}
+		if (flush_pass < 1) {
+			flush_pass = 1;
+		}
+
+		// MONITOR_SET(MONITOR_FLUSH_ADAPTIVE_AVG_TIME_SLOT,
+		// 	    list_tm / list_pass);
+		// MONITOR_SET(MONITOR_LRU_BATCH_FLUSH_AVG_TIME_SLOT,
+		// 	    lru_tm  / lru_pass);
+
+		// MONITOR_SET(MONITOR_FLUSH_ADAPTIVE_AVG_TIME_THREAD,
+		// 	    list_tm / (srv_n_page_cleaners * flush_pass));
+		// MONITOR_SET(MONITOR_LRU_BATCH_FLUSH_AVG_TIME_THREAD,
+		// 	    lru_tm / (srv_n_page_cleaners * flush_pass));
+		// MONITOR_SET(MONITOR_FLUSH_ADAPTIVE_AVG_TIME_EST,
+		// 	    flush_tm * list_tm / flush_pass
+		// 	    / (list_tm + lru_tm));
+		// MONITOR_SET(MONITOR_LRU_BATCH_FLUSH_AVG_TIME_EST,
+		// 	    flush_tm * lru_tm / flush_pass
+		// 	    / (list_tm + lru_tm));
+		// MONITOR_SET(MONITOR_FLUSH_AVG_TIME, flush_tm / flush_pass);
+
+		// MONITOR_SET(MONITOR_FLUSH_ADAPTIVE_AVG_PASS,
+		// 	    list_pass / warm_buf_page_cleaner->n_slots);
+		// MONITOR_SET(MONITOR_LRU_BATCH_FLUSH_AVG_PASS,
+		// 	    lru_pass / warm_buf_page_cleaner->n_slots);
+		// MONITOR_SET(MONITOR_FLUSH_AVG_PASS, flush_pass);
+
+		prev_lsn = cur_lsn;
+		prev_time = curr_time;
+
+		n_iterations = 0;
+
+		sum_pages = 0;
+	}
+
+	oldest_lsn = warm_buf_pool_get_oldest_modification();
+
+	ut_ad(oldest_lsn <= log_get_lsn());
+
+	age = cur_lsn > oldest_lsn ? cur_lsn - oldest_lsn : 0;
+
+	pct_for_dirty = af_get_pct_for_dirty();
+	pct_for_lsn = af_get_pct_for_lsn(age);
+
+	pct_total = ut_max(pct_for_dirty, pct_for_lsn);
+
+	/* Estimate pages to be flushed for the lsn progress */
+	ulint	sum_pages_for_lsn = 0;
+	lsn_t	target_lsn = oldest_lsn
+			     + lsn_avg_rate * buf_flush_lsn_scan_factor;
+
+	for (ulint i = 0; i < srv_warm_buf_pool_instances; i++) {
+		buf_pool_t*	buf_pool = buf_pool_from_array(srv_buf_pool_instances + i);
+		ulint		pages_for_lsn = 0;
+
+		buf_flush_list_mutex_enter(buf_pool);
+		for (buf_page_t* b = UT_LIST_GET_LAST(buf_pool->flush_list);
+		     b != NULL;
+		     b = UT_LIST_GET_PREV(list, b)) {
+			if (b->oldest_modification > target_lsn) {
+				break;
+			}
+			++pages_for_lsn;
+		}
+		buf_flush_list_mutex_exit(buf_pool);
+
+		sum_pages_for_lsn += pages_for_lsn;
+
+		mutex_enter(&warm_buf_page_cleaner->mutex);
+		ut_ad(warm_buf_page_cleaner->slots[i].state
+		      == PAGE_CLEANER_STATE_NONE);
+		warm_buf_page_cleaner->slots[i].n_pages_requested
+			= pages_for_lsn / buf_flush_lsn_scan_factor + 1;
+		mutex_exit(&warm_buf_page_cleaner->mutex);
+	}
+
+	sum_pages_for_lsn /= buf_flush_lsn_scan_factor;
+	if(sum_pages_for_lsn < 1) {
+		sum_pages_for_lsn = 1;
+	}
+
+	/* Cap the maximum IO capacity that we are going to use by
+	max_io_capacity. Limit the value to avoid too quick increase */
+	ulint	pages_for_lsn =
+		std::min<ulint>(sum_pages_for_lsn, srv_max_io_capacity * 2);
+
+	n_pages = (PCT_IO(pct_total) + avg_page_rate + pages_for_lsn) / 3;
+
+	
+#ifdef UNIV_WARM_BUF_CACHE
+	if (n_pages > (srv_max_io_capacity * (1.0/3.0))){ //FIXME : warm buf / total buf
+		n_pages = (srv_max_io_capacity * (1.0/3.0));
+	}
+#else
+	if (n_pages > srv_max_io_capacity) {
+		n_pages = srv_max_io_capacity;
+	}
+#endif /*UNIV_WARM_BUF_CACHE*/
+
+
+
+	/* Normalize request for each instance */
+	mutex_enter(&warm_buf_page_cleaner->mutex);
+	ut_ad(warm_buf_page_cleaner->n_slots_requested == 0);
+	ut_ad(warm_buf_page_cleaner->n_slots_flushing == 0);
+	ut_ad(warm_buf_page_cleaner->n_slots_finished == 0);
+
+	for (ulint i = 0; i < srv_warm_buf_pool_instances; i++) {
+		/* if REDO has enough of free space,
+		don't care about age distribution of pages */
+		warm_buf_page_cleaner->slots[i].n_pages_requested = pct_for_lsn > 30 ?
+			warm_buf_page_cleaner->slots[i].n_pages_requested
+			* n_pages / sum_pages_for_lsn + 1
+			: n_pages / srv_warm_buf_pool_instances;
+	}
+	mutex_exit(&warm_buf_page_cleaner->mutex);
+
+	// MONITOR_SET(MONITOR_FLUSH_N_TO_FLUSH_REQUESTED, n_pages);
+
+	// MONITOR_SET(MONITOR_FLUSH_N_TO_FLUSH_BY_AGE, sum_pages_for_lsn);
+
+	// MONITOR_SET(MONITOR_FLUSH_AVG_PAGE_RATE, avg_page_rate);
+	// MONITOR_SET(MONITOR_FLUSH_LSN_AVG_RATE, lsn_avg_rate);
+	// MONITOR_SET(MONITOR_FLUSH_PCT_FOR_DIRTY, pct_for_dirty);
+	// MONITOR_SET(MONITOR_FLUSH_PCT_FOR_LSN, pct_for_lsn);
+
+	*lsn_limit = LSN_MAX;
+
+	return(n_pages);
+}
+
+
+
+/******************************************************************//**
+page_cleaner thread tasked with flushing dirty pages from the buffer
+pools. As of now we'll have only one coordinator.
+@return a dummy parameter */
+
+extern "C"
+os_thread_ret_t
+DECLARE_THREAD(warm_buf_flush_page_cleaner_coordinator)(
+/*===============================================*/
+	void*	arg MY_ATTRIBUTE((unused)))
+			/*!< in: a dummy parameter required by
+			os_thread_create */
+{
+	ib_time_monotonic_t	next_loop_time = ut_time_monotonic_ms() + 1000;
+	ulint	n_flushed = 0;
+	ulint	last_activity = srv_get_activity_count();
+	ulint	last_pages = 0;
+
+	my_thread_init();
+
+#ifdef UNIV_PFS_THREAD
+	pfs_register_thread(warm_buf_page_cleaner_thread_key);
+#endif /* UNIV_PFS_THREAD */
+
+	warm_buf_page_cleaner_is_active = true;
+	os_event_wait(warm_buf_flush_event);
+
+	ulint		ret_sleep = 0;
+	ulint		n_evicted = 0;
+	ulint		n_flushed_last = 0;
+	ulint		warn_interval = 1;
+	ulint		warn_count = 0;
+	int64_t		sig_count = os_event_reset(warm_buf_flush_event);
+
+	while (srv_shutdown_state == SRV_SHUTDOWN_NONE) {
+
+		/* The page_cleaner skips sleep if the server is
+		idle and there are no pending IOs in the buffer pool
+		and there is work to do. */
+		if (srv_check_activity(last_activity)
+		    || warm_buf_get_n_pending_read_ios()
+		    || n_flushed == 0) {
+
+			ret_sleep = warm_buf_pc_sleep_if_needed(next_loop_time, sig_count);
+
+			if (srv_shutdown_state != SRV_SHUTDOWN_NONE) {
+				break;
+			}
+		} else if (ut_time_monotonic_ms() > next_loop_time) {
+			ret_sleep = OS_SYNC_TIME_EXCEEDED;
+		} else {
+			ret_sleep = 0;
+		}
+
+		sig_count = os_event_reset(warm_buf_flush_event);
+
+		if (ret_sleep == OS_SYNC_TIME_EXCEEDED) {
+			ib_time_monotonic_ms_t curr_time =
+						ut_time_monotonic_ms();
+
+			if (curr_time > next_loop_time + 3000) {
+				if (warn_count == 0) {
+					ib::info() << "warm buffer page_cleaner: 1000ms"
+						" intended loop took "
+						<< 1000 + curr_time
+						   - next_loop_time
+						<< "ms. The settings might not"
+						" be optimal. (flushed="
+						<< n_flushed_last
+						<< " and evicted="
+						<< n_evicted
+						<< ", during the time.)";
+					if (warn_interval > 300) {
+						warn_interval = 600;
+					} else {
+						warn_interval *= 2;
+					}
+
+					warn_count = warn_interval;
+				} else {
+					--warn_count;
+				}
+			} else {
+				/* reset counter */
+				warn_interval = 1;
+				warn_count = 0;
+			}
+
+			next_loop_time = curr_time + 1000;
+			n_flushed_last = n_evicted = 0;
+		}
+
+		if (ret_sleep != OS_SYNC_TIME_EXCEEDED
+		    && srv_flush_sync
+		    && buf_flush_sync_lsn > 0) {
+			/* woke up for flush_sync */
+			mutex_enter(&warm_buf_page_cleaner->mutex);
+			lsn_t	lsn_limit = buf_flush_sync_lsn;
+			buf_flush_sync_lsn = 0;
+			mutex_exit(&warm_buf_page_cleaner->mutex);
+
+			/* Request flushing for threads */
+			warm_buf_pc_request(ULINT_MAX, lsn_limit);
+
+			ib_time_monotonic_ms_t tm = ut_time_monotonic_ms();
+
+			/* Coordinator also treats requests */
+			while (warm_buf_pc_flush_slot() > 0) {}
+
+			/* only coordinator is using these counters,
+			so no need to protect by lock. */
+			warm_buf_page_cleaner->flush_time += ut_time_monotonic_ms() - tm;
+			warm_buf_page_cleaner->flush_pass++;
+
+			/* Wait for all slots to be finished */
+			ulint	n_flushed_lru = 0;
+			ulint	n_flushed_list = 0;
+			warm_buf_pc_wait_finished(&n_flushed_lru, &n_flushed_list);
+
+			if (n_flushed_list > 0 || n_flushed_lru > 0) {
+				buf_flush_stats(n_flushed_list, n_flushed_lru);
+
+			// 	MONITOR_INC_VALUE_CUMULATIVE(
+			// 		MONITOR_FLUSH_SYNC_TOTAL_PAGE,
+			// 		MONITOR_FLUSH_SYNC_COUNT,
+			// 		MONITOR_FLUSH_SYNC_PAGES,
+			// 		n_flushed_lru + n_flushed_list);
+			}
+
+			n_flushed = n_flushed_lru + n_flushed_list;
+			// ib::info()<<"[ky] <<warm 1>> n_flushed_lru: "<<n_flushed_lru<<" n_flushed_list: "<<n_flushed_list;
+
+		} else if (srv_check_activity(last_activity)) {
+			ulint	n_to_flush;
+			lsn_t	lsn_limit = 0;
+
+			/* Estimate pages from flush_list to be flushed */
+			if (ret_sleep == OS_SYNC_TIME_EXCEEDED) {
+				last_activity = srv_get_activity_count();
+				n_to_flush =
+					warm_buf_page_cleaner_flush_pages_recommendation(
+						&lsn_limit, last_pages);
+			
+			} else {
+				n_to_flush = 0;
+			}
+			// ib::info()<<"[ky] <<warm>> n_to_flush: "<<n_to_flush;
+
+			/* Request flushing for threads */
+			warm_buf_pc_request(n_to_flush, lsn_limit);
+
+			ib_time_monotonic_ms_t tm = ut_time_monotonic_ms();
+
+			/* Coordinator also treats requests */
+			while (warm_buf_pc_flush_slot() > 0) {
+				/* No op */
+			}
+			
+			/* only coordinator is using these counters,
+			so no need to protect by lock. */
+			warm_buf_page_cleaner->flush_time += ut_time_monotonic_ms() - tm;
+			warm_buf_page_cleaner->flush_pass++ ;
+
+			/* Wait for all slots to be finished */
+			ulint	n_flushed_lru = 0;
+			ulint	n_flushed_list = 0;
+
+			warm_buf_pc_wait_finished(&n_flushed_lru, &n_flushed_list);
+
+
+			if (n_flushed_list > 0 || n_flushed_lru > 0) {
+				buf_flush_stats(n_flushed_list, n_flushed_lru);
+			}
+
+			if (ret_sleep == OS_SYNC_TIME_EXCEEDED) {
+				last_pages = n_flushed_list;
+			}
+
+			n_evicted += n_flushed_lru;
+			n_flushed_last += n_flushed_list;
+
+			n_flushed = n_flushed_lru + n_flushed_list;
+			// ib::info()<<"[ky] <<warm 2>> n_flushed_lru: "<<n_flushed_lru<<" n_flushed_list: "<<n_flushed_list;
+			// if (n_flushed_lru) {
+			// 	MONITOR_INC_VALUE_CUMULATIVE(
+			// 		MONITOR_LRU_BATCH_FLUSH_TOTAL_PAGE,
+			// 		MONITOR_LRU_BATCH_FLUSH_COUNT,
+			// 		MONITOR_LRU_BATCH_FLUSH_PAGES,
+			// 		n_flushed_lru);
+			// }
+
+			// if (n_flushed_list) {
+			// 	MONITOR_INC_VALUE_CUMULATIVE(
+			// 		MONITOR_FLUSH_ADAPTIVE_TOTAL_PAGE,
+			// 		MONITOR_FLUSH_ADAPTIVE_COUNT,
+			// 		MONITOR_FLUSH_ADAPTIVE_PAGES,
+			// 		n_flushed_list);
+			// }
+
+		} else if (ret_sleep == OS_SYNC_TIME_EXCEEDED) {
+			/* no activity, slept enough */
+			warm_buf_flush_lists(PCT_IO(100), LSN_MAX, &n_flushed);
+
+			n_flushed_last += n_flushed;
+
+			// if (n_flushed) {
+			// 	MONITOR_INC_VALUE_CUMULATIVE(
+			// 		MONITOR_FLUSH_BACKGROUND_TOTAL_PAGE,
+			// 		MONITOR_FLUSH_BACKGROUND_COUNT,
+			// 		MONITOR_FLUSH_BACKGROUND_PAGES,
+			// 		n_flushed);
+
+			// }
+
+		} else {
+			/* no activity, but woken up by event */
+			n_flushed = 0;
+		}
+
+		// ut_d(buf_flush_page_cleaner_disabled_loop());
+	}
+
+	ut_ad(srv_shutdown_state > 0);
+	if (srv_fast_shutdown == 2
+	    || srv_shutdown_state == SRV_SHUTDOWN_EXIT_THREADS) {
+		/* In very fast shutdown or when innodb failed to start, we
+		simulate a crash of the buffer pool. We are not required to do
+		any flushing. */
+		goto thread_exit;
+	}
+
+	/* In case of normal and slow shutdown the page_cleaner thread
+	must wait for all other activity in the server to die down.
+	Note that we can start flushing the buffer pool as soon as the
+	server enters shutdown phase but we must stay alive long enough
+	to ensure that any work done by the master or purge threads is
+	also flushed.
+	During shutdown we pass through two stages. In the first stage,
+	when SRV_SHUTDOWN_CLEANUP is set other threads like the master
+	and the purge threads may be working as well. We start flushing
+	the buffer pool but can't be sure that no new pages are being
+	dirtied until we enter SRV_SHUTDOWN_FLUSH_PHASE phase. */
+
+	do {
+		warm_buf_pc_request(ULINT_MAX, LSN_MAX);
+
+		while (warm_buf_pc_flush_slot() > 0) {}
+
+		ulint	n_flushed_lru = 0;
+		ulint	n_flushed_list = 0;
+		warm_buf_pc_wait_finished(&n_flushed_lru, &n_flushed_list);
+
+		n_flushed = n_flushed_lru + n_flushed_list;
+
+		/* We sleep only if there are no pages to flush */
+		if (n_flushed == 0) {
+			os_thread_sleep(100000);
+		}
+	} while (srv_shutdown_state == SRV_SHUTDOWN_CLEANUP);
+
+	/* At this point all threads including the master and the purge
+	thread must have been suspended. */
+	ut_a(srv_get_active_thread_type() == SRV_NONE);
+	ut_a(srv_shutdown_state == SRV_SHUTDOWN_FLUSH_PHASE);
+
+	/* We can now make a final sweep on flushing the buffer pool
+	and exit after we have cleaned the whole buffer pool.
+	It is important that we wait for any running batch that has
+	been triggered by us to finish. Otherwise we can end up
+	considering end of that batch as a finish of our final
+	sweep and we'll come out of the loop leaving behind dirty pages
+	in the flush_list */
+	warm_buf_flush_wait_batch_end(NULL, BUF_FLUSH_LIST);
+	warm_buf_flush_wait_LRU_batch_end();
+
+	bool	success;
+
+	do {
+		warm_buf_pc_request(ULINT_MAX, LSN_MAX);
+
+		while (warm_buf_pc_flush_slot() > 0) {}
+
+		ulint	n_flushed_lru = 0;
+		ulint	n_flushed_list = 0;
+		success = warm_buf_pc_wait_finished(&n_flushed_lru, &n_flushed_list);
+
+		n_flushed = n_flushed_lru + n_flushed_list;
+
+		warm_buf_flush_wait_batch_end(NULL, BUF_FLUSH_LIST);
+		warm_buf_flush_wait_LRU_batch_end();
+
+	} while (!success || n_flushed > 0);
+
+	/* Some sanity checks */
+	ut_a(srv_get_active_thread_type() == SRV_NONE);
+	ut_a(srv_shutdown_state == SRV_SHUTDOWN_FLUSH_PHASE);
+
+	for (ulint i = 0; i < srv_warm_buf_pool_instances; i++) {
+		buf_pool_t* buf_pool = buf_pool_from_array(srv_buf_pool_instances + i);
+		ut_a(UT_LIST_GET_LEN(buf_pool->flush_list) == 0);
+	}
+
+	/* We have lived our life. Time to die. */
+
+thread_exit:
+	/* All worker threads are waiting for the event here,
+	and no more access to page_cleaner structure by them.
+	Wakes worker threads up just to make them exit. */
+	warm_buf_page_cleaner->is_running = false;
+	os_event_set(warm_buf_page_cleaner->is_requested);
+
+	warm_buf_flush_page_cleaner_close();
+
+	warm_buf_page_cleaner_is_active = false;
+
+	my_thread_end();
+
+	/* We count the number of threads in os_thread_exit(). A created
+	thread should always use that to exit and not use return() to exit. */
+	os_thread_exit();
+
+	OS_THREAD_DUMMY_RETURN;
+
+}
+
+#endif /*UNIV_WARM_BUF_CACHE*/

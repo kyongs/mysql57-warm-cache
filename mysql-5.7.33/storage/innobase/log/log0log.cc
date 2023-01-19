@@ -2209,6 +2209,19 @@ loop:
 		}
 	}
 
+#ifdef UNIV_WARM_BUF_CACHE	
+    count = 0;
+	while (warm_buf_page_cleaner_is_active) {
+		++count;
+		os_thread_sleep(100000);
+		if (srv_print_verbose_log && count > 600) {
+			ib::info() << "Waiting for WARM buffer page_cleaner to"
+				" finish flushing of buffer pool";
+			count = 0;
+		}
+	}
+#endif /* UNIV_WARM_BUF_CACHE */
+
 	log_mutex_enter();
 	const ulint	n_write	= log_sys->n_pending_checkpoint_writes;
 	const ulint	n_flush	= log_sys->n_pending_flushes;

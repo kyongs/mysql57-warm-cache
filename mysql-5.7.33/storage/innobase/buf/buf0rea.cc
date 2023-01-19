@@ -198,6 +198,55 @@ buf_read_page_low(
 
 	IORequest	request(type | IORequest::READ);
 
+	/*kyong - read*/
+	
+	if ((unsigned)page_id.space() == srv_cust_space_id){ //customer
+		// ib::info()<<"[read miss] cust "<<page_id.page_no();
+		srv_stats.tpcc_cust_disk_rd.inc();
+	}
+
+	else if ((unsigned)page_id.space() == srv_dist_space_id){ //district
+		// ib::info()<<"[read miss] dist "<<page_id.page_no();
+		srv_stats.tpcc_dist_disk_rd.inc();
+	}
+
+	else if ((unsigned)page_id.space() == srv_his_space_id){ //history
+		// ib::info()<<"[read miss] his "<<page_id.page_no();
+		srv_stats.tpcc_his_disk_rd.inc();
+	}
+
+	else if ((unsigned)page_id.space() == srv_itm_space_id){ //item
+		// ib::info()<<"[read miss] itm "<<page_id.page_no();
+		srv_stats.tpcc_itm_disk_rd.inc();
+	}
+
+	else if ((unsigned)page_id.space() == srv_no_space_id){ //new orders
+		// ib::info()<<"[read miss] no "<<page_id.page_no();
+		srv_stats.tpcc_no_disk_rd.inc();
+	}
+
+	else if ((unsigned)page_id.space() == srv_ol_space_id){ //order_line
+		// ib::info()<<"[read miss] ol "<<page_id.page_no();
+		srv_stats.tpcc_ol_disk_rd.inc();
+	}
+
+	else if ((unsigned)page_id.space() == srv_or_space_id){ //orders
+		// ib::info()<<"[read miss] or "<<page_id.page_no();
+		srv_stats.tpcc_or_disk_rd.inc();
+	}
+
+	else if ((unsigned)page_id.space() == srv_stk_space_id){ //stock
+		// ib::info()<<"[read miss] stk "<<page_id.page_no();
+		srv_stats.tpcc_stk_disk_rd.inc();
+	}
+
+	else if ((unsigned)page_id.space() == srv_wh_space_id){ //warehouse
+	// ib::info()<<"[read miss] wh "<<page_id.page_no();
+		srv_stats.tpcc_wh_disk_rd.inc();
+	}
+	/**/
+
+
 	*err = fil_io(
 		request, sync, page_id, page_size, 0, page_size.physical(),
 		dst, bpage);

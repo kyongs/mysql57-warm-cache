@@ -315,6 +315,9 @@ DECLARE_THREAD(io_handler_thread)(
 
 	while (srv_shutdown_state != SRV_SHUTDOWN_EXIT_THREADS
 	       || buf_page_cleaner_is_active
+#ifdef UNIV_WARM_BUF_CACHE
+	       || warm_buf_page_cleaner_is_active
+#endif /* UNIV_WARM_BUF_CACHE */
 	       || !os_aio_all_slots_free()) {
 		fil_aio_wait(segment);
 	}
@@ -1295,8 +1298,14 @@ srv_shutdown_all_bg_threads()
 			}
 
 			os_event_set(buf_flush_event);
+#ifdef UNIV_WARM_BUF_CACHE
+            os_event_set(warm_buf_flush_event);
+#endif /* UNIV_WARM_BUF_CACHE */
 
 			if (!buf_page_cleaner_is_active
+#ifdef UNIV_WARM_BUF_CACHE
+                && !warm_buf_page_cleaner_is_active
+#endif /* UNIV_WARM_BUF_CACHE */
 			    && os_aio_all_slots_free()) {
 				os_aio_wake_all_threads_at_shutdown();
 			}
@@ -1657,6 +1666,9 @@ innobase_start_or_create_for_mysql(void)
 			    + srv_n_write_io_threads
 			    + srv_n_purge_threads
 			    + srv_n_page_cleaners
+#ifdef UNIV_WARM_BUF_CACHE
+                + warm_buf_srv_n_page_cleaners /* a WARM buffer page cleaner FIXME!*/
+#endif /* UNIV_WARM_BUF_CACHE */
 			    /* FTS Parallel Sort */
 			    + fts_sort_pll_degree * FTS_NUM_AUX_INDEX
 			      * max_connections;
@@ -1714,11 +1726,19 @@ innobase_start_or_create_for_mysql(void)
 
 	srv_buf_pool_size = buf_pool_size_align(srv_buf_pool_size);
 
+	//[ky:cmt] 만약 srv_n_page_cleaner 개수가 buffer pool instance보다 많다면 최대 buffer instance 개수만큼 제한
+	// n_page_cleaner의 default 개수는 4개!
 	if (srv_n_page_cleaners > srv_buf_pool_instances) {
 		/* limit of page_cleaner parallelizability
 		is number of buffer pool instances. */
 		srv_n_page_cleaners = srv_buf_pool_instances;
 	}
+
+#ifdef UNIV_WARM_BUF_CACHE
+	if (warm_buf_srv_n_page_cleaners > srv_warm_buf_pool_instances){
+		warm_buf_srv_n_page_cleaners = srv_warm_buf_pool_instances;
+	}
+#endif /*UNIV_WARM_BUF_CACHE*/
 
 	srv_boot();
 
@@ -1840,6 +1860,31 @@ innobase_start_or_create_for_mysql(void)
 
 	ib::info() << "Completed initialization of buffer pool";
 
+#ifdef UNIV_WARM_BUF_CACHE
+    if (srv_use_warm_buf) {
+        if (srv_warm_buf_pool_size >= 1024 * 1024 * 1024) {
+            size = ((double)srv_warm_buf_pool_size) / (1024 * 1024 * 1024);
+            unit = 'G';
+        } else {
+            size = ((double)srv_warm_buf_pool_size) / (1024 * 1024);
+            unit = 'M';
+        }
+
+        ib::info() << "Initializing WARM buffer pool, total size = "
+            << size << unit << ", instances = " << srv_warm_buf_pool_instances;
+
+        err = warm_buf_pool_init(srv_warm_buf_pool_size, srv_warm_buf_pool_instances);
+
+        if (err != DB_SUCCESS) {
+            ib::info() << "Cannot allocate memory for the WARM buffer pool";
+
+            return (srv_init_abort(DB_ERROR));
+        }
+
+        ib::info() << "Completed initialization of WARM buffer pool";
+    }
+#endif /* UNIV_WARM_BUF_CACHE */
+
 #ifdef UNIV_DEBUG
 	/* We have observed deadlocks with a 5MB buffer pool but
 	the actual lower limit could very well be a little higher. */
@@ -1886,6 +1931,23 @@ innobase_start_or_create_for_mysql(void)
 	while (!buf_page_cleaner_is_active) {
 		os_thread_sleep(10000);
 	}
+#ifdef UNIV_WARM_BUF_CACHE
+	warm_buf_flush_page_cleaner_init();
+	// os_thread_create(buf_flush_warm_buf_page_cleaner_thread, NULL, NULL);
+	os_thread_create(warm_buf_flush_page_cleaner_coordinator,
+			 NULL, NULL);
+
+	for (i = 1; i < warm_buf_srv_n_page_cleaners; ++i) {
+		os_thread_create(warm_buf_flush_page_cleaner_worker,
+				 NULL, NULL);
+	}
+
+	/* Make sure page cleaner is active. */
+	while (!warm_buf_page_cleaner_is_active) {
+		os_thread_sleep(10000);
+	}
+	ib::info()<<"[ky] warm buf page cleaner thread create completed!";
+#endif /* UNIV_WARM_BUF_CACHE */
 
 	srv_start_state_set(SRV_START_STATE_IO);
 
@@ -2577,6 +2639,10 @@ files_checked:
 
 	/* wake main loop of page cleaner up */
 	os_event_set(buf_flush_event);
+
+#ifdef UNIV_WARM_BUF_CACHE
+    os_event_set(warm_buf_flush_event);
+#endif /* UNIV_WARM_BUF_CACHE */
 
 	sum_of_data_file_sizes = srv_sys_space.get_sum_of_sizes();
 	ut_a(sum_of_new_sizes != ULINT_UNDEFINED);
