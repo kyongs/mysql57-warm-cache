@@ -87,6 +87,11 @@ my_bool  srv_numa_interleave = FALSE;
 buf_pool_t *warm_buf_pool_ptr;
 #endif /* UNIV_WARM_BUF_CACHE */
 
+#ifdef UNIV_TPCC_MONITOR
+#include "tpcc0mon.h"
+#endif /*UNIV_TPCC_MONITOR*/
+
+
 #ifdef HAVE_LIBNUMA
 #include <numa.h>
 #include <numaif.h>
@@ -416,7 +421,12 @@ buf_pool_get_oldest_modification(void)
 	thread to add a dirty page to any flush list. */
 	log_flush_order_mutex_enter();
 
+#ifdef UNIV_WARM_BUF_CACHE
+	for (ulint i = 0; i < (srv_buf_pool_instances + srv_warm_buf_pool_instances); i++) {
+#else
 	for (ulint i = 0; i < srv_buf_pool_instances; i++) {
+#endif /*UNIV_WARM_BUF_CACHE*/
+	// for (ulint i = 0; i < srv_buf_pool_instances; i++) {
 		buf_pool_t*	buf_pool;
 
 		buf_pool = buf_pool_from_array(i);
@@ -455,61 +465,61 @@ buf_pool_get_oldest_modification(void)
 	return(oldest_lsn);
 }
 
-#ifdef UNIV_WARM_BUF_CACHE
-/********************************************************************//**
-Gets the smallest oldest_modification lsn for any page in the pool. Returns
-zero if all modified pages have been flushed to disk.
-@return oldest modification in pool, zero if none */
-lsn_t
-warm_buf_pool_get_oldest_modification(void)
-/*==================================*/
-{
-	lsn_t		lsn = 0;
-	lsn_t		oldest_lsn = 0;
+// #ifdef UNIV_WARM_BUF_CACHE
+// /********************************************************************//**
+// Gets the smallest oldest_modification lsn for any page in the pool. Returns
+// zero if all modified pages have been flushed to disk.
+// @return oldest modification in pool, zero if none */
+// lsn_t
+// warm_buf_pool_get_oldest_modification(void)
+// /*==================================*/
+// {
+// 	lsn_t		lsn = 0;
+// 	lsn_t		oldest_lsn = 0;
 
-	/* When we traverse all the flush lists we don't want another
-	thread to add a dirty page to any flush list. */
-	log_flush_order_mutex_enter();
+// 	/* When we traverse all the flush lists we don't want another
+// 	thread to add a dirty page to any flush list. */
+// 	log_flush_order_mutex_enter();
 
-	for (ulint i = 0; i < srv_warm_buf_pool_instances; i++) {
-		buf_pool_t*	buf_pool;
+// 	for (ulint i = 0; i < srv_warm_buf_pool_instances; i++) {
+// 		buf_pool_t*	buf_pool;
 
-		buf_pool = buf_pool_from_array(srv_buf_pool_instances + i);
+// 		buf_pool = buf_pool_from_array(srv_buf_pool_instances + i);
 
-		buf_flush_list_mutex_enter(buf_pool);
+// 		buf_flush_list_mutex_enter(buf_pool);
 
-		buf_page_t*	bpage;
+// 		buf_page_t*	bpage;
 
-		/* We don't let log-checkpoint halt because pages from system
-		temporary are not yet flushed to the disk. Anyway, object
-		residing in system temporary doesn't generate REDO logging. */
-		for (bpage = UT_LIST_GET_LAST(buf_pool->flush_list);
-		     bpage != NULL
-			&& fsp_is_system_temporary(bpage->id.space());
-		     bpage = UT_LIST_GET_PREV(list, bpage)) {
-			/* Do nothing. */
-		}
+// 		/* We don't let log-checkpoint halt because pages from system
+// 		temporary are not yet flushed to the disk. Anyway, object
+// 		residing in system temporary doesn't generate REDO logging. */
+// 		for (bpage = UT_LIST_GET_LAST(buf_pool->flush_list);
+// 		     bpage != NULL
+// 			&& fsp_is_system_temporary(bpage->id.space());
+// 		     bpage = UT_LIST_GET_PREV(list, bpage)) {
+// 			/* Do nothing. */
+// 		}
 
-		if (bpage != NULL) {
-			ut_ad(bpage->in_flush_list);
-			lsn = bpage->oldest_modification;
-		}
+// 		if (bpage != NULL) {
+// 			ut_ad(bpage->in_flush_list);
+// 			lsn = bpage->oldest_modification;
+// 		}
 
-		buf_flush_list_mutex_exit(buf_pool);
+// 		buf_flush_list_mutex_exit(buf_pool);
 
-		if (!oldest_lsn || oldest_lsn > lsn) {
-			oldest_lsn = lsn;
-		}
-	}
+// 		if (!oldest_lsn || oldest_lsn > lsn) {
+// 			oldest_lsn = lsn;
+// 		}
+// 	}
 
-	log_flush_order_mutex_exit();
+// 	log_flush_order_mutex_exit();
 
-	/* The returned answer may be out of date: the flush_list can
-	change after the mutex has been released. */
+// 	/* The returned answer may be out of date: the flush_list can
+// 	change after the mutex has been released. */
 
-	return(oldest_lsn);
-}
-#endif /*UNIV_WARM_BUF_CACHE*/
+// 	return(oldest_lsn);
+// }
+// #endif /*UNIV_WARM_BUF_CACHE*/
 
 /********************************************************************//**
 Get total buffer pool statistics. */
@@ -883,7 +893,7 @@ buf_page_is_corrupted(
 
 		}
 	}
-#endif /* !UNIV_HOTBACKUP && !UNIV_INNOCHECKSUM && UNIV_WARM_BUF_CACHE*/
+#endif /* !UNIV_HOTBACKUP && !UNIV_INNOCHECKSUM && !UNIV_WARM_BUF_CACHE*/
 
 	/* Check whether the checksum fields have correct values */
 
@@ -1922,6 +1932,32 @@ buf_pool_init_instance(
 
 #ifdef UNIV_WARM_BUF_CACHE
 /********************************************************************//**
+Set buffer pool size variables after resizing it */
+static
+void
+warm_buf_pool_set_sizes(void)
+/*====================*/
+{
+	ulint	i;
+	ulint	curr_size = 0;
+
+	buf_pool_mutex_enter_all();
+
+	for (i = 0; i < srv_warm_buf_pool_instances; i++) {
+		buf_pool_t*	buf_pool;
+
+		buf_pool = buf_pool_from_array(i + srv_buf_pool_instances);
+		curr_size += buf_pool->curr_pool_size;
+	}
+
+	srv_buf_pool_curr_size = curr_size;
+	srv_buf_pool_old_size = srv_buf_pool_size;
+	srv_buf_pool_base_size = srv_buf_pool_size;
+
+	buf_pool_mutex_exit_all();
+}
+
+/********************************************************************//**
 Initialize a buffer pool instance.
 @return DB_SUCCESS if all goes well. */
 ulint
@@ -2102,8 +2138,10 @@ warm_buf_pool_init(
 			return(DB_ERROR);
 		}
 	}
-	
+
+	// warm_buf_pool_set_size();
 	warm_buf_LRU_old_ratio_update(100 * 3/ 8, FALSE);
+
 	return(DB_SUCCESS);
 }
 #endif /* UNIV_WARM_BUF_CACHE */
@@ -4361,7 +4399,7 @@ loop:
 		block = NULL;
 	}
 
-	if (block == NULL) {
+	if (block == NULL) { //page not in buffer pool!
 		/* Page not in buf_pool: needs to be read from file */
 
 		if (mode == BUF_GET_IF_IN_POOL_OR_WATCH) {
@@ -4418,7 +4456,7 @@ loop:
 			return(NULL);
 		}
 
-		if (buf_read_page(page_id, page_size)) {
+		if (buf_read_page(page_id, page_size)) { // 이 페이지를 읽지 못한거시다!
 			buf_read_ahead_random(page_id, page_size,
 					      ibuf_inside(mtr));
 
@@ -4430,33 +4468,19 @@ loop:
 				retries = BUF_PAGE_READ_MAX_RETRIES;
 			);
 		} else {
-#ifndef UNiV_WARM_BUF_CACHE
+			ib::fatal()<< "page_id buffer pool index: "<< buf_pool_index(buf_pool);
 			ib::fatal() << "Unable to read page " << page_id
-				<< " into the buffer pool after "
-				<< BUF_PAGE_READ_MAX_RETRIES << " attempts."
-				" The most probable cause of this error may"
-				" be that the table has been corrupted. Or,"
-				" the table was compressed with with an"
-				" algorithm that is not supported by this"
-				" instance. If it is not a decompress failure,"
-				" you can try to fix this problem by using"
-				" innodb_force_recovery."
-				" Please see " REFMAN " for more"
-				" details. Aborting...";
-#else
-	ib::fatal() << "Unable to read page " << page_id
-				<< " into the buffer pool after "
-				<< BUF_PAGE_READ_MAX_RETRIES << " attempts."
-				" The most probable cause of this error may"
-				" be that the table has been corrupted. Or,"
-				" the table was compressed with with an"
-				" algorithm that is not supported by this"
-				" instance. If it is not a decompress failure,"
-				" you can try to fix this problem by using"
-				" innodb_force_recovery."
-				" Please see " REFMAN " for more"
-				" details. Aborting..." << buf_pool_index(buf_pool);
-#endif /*UNIV_WARM_BUF_CACHE*/
+					<< " into the buffer pool after "
+					<< BUF_PAGE_READ_MAX_RETRIES << " attempts."
+					" The most probable cause of this error may"
+					" be that the table has been corrupted. Or,"
+					" the table was compressed with with an"
+					" algorithm that is not supported by this"
+					" instance. If it is not a decompress failure,"
+					" you can try to fix this problem by using"
+					" innodb_force_recovery."
+					" Please see " REFMAN " for more"
+					" details. Aborting..." << buf_pool_index(buf_pool);
 		}
 
 #if defined UNIV_DEBUG || defined UNIV_BUF_DEBUG
@@ -4465,70 +4489,26 @@ loop:
 		     || buf_validate());
 #endif /* UNIV_DEBUG || UNIV_BUF_DEBUG */
 		goto loop;
-	} else {
+	} else { // page in buffer pool : Buffer Hit
 		fix_block = block;
-#ifdef UNIV_WARM_BUF_CACHE
-        /* Buffer Hit */
-        if (buf_pool->instance_no >= srv_buf_pool_instances) {
-            if (page_id.space() == srv_ol_space_id) {
-                srv_stats.warm_buf_pages_read_ol.inc();
-            } else if (page_id.space() == srv_stk_space_id) {
-                srv_stats.warm_buf_pages_read_stk.inc();
-            } else if (page_id.space() == srv_cust_space_id) {
-                srv_stats.warm_buf_pages_read_cust.inc();
-            }
-        }
-#endif /* UNIV_WARM_BUF_CACHE */
+// #ifdef UNIV_WARM_BUF_CACHE
+//         /* Buffer Hit */
+//         if (buf_pool->instance_no >= srv_buf_pool_instances) {
+//             if (page_id.space() == srv_ol_space_id) {
+//                 srv_stats.warm_buf_pages_read_ol.inc();
+//             } else if (page_id.space() == srv_stk_space_id) {
+//                 srv_stats.warm_buf_pages_read_stk.inc();
+//             } else if (page_id.space() == srv_cust_space_id) {
+//                 srv_stats.warm_buf_pages_read_cust.inc();
+//             }
+//         }
+// #endif /* UNIV_WARM_BUF_CACHE */
 
-		/*kyong - read*/
-		srv_stats.tpcc_total_rd.inc();
-
-		if ((unsigned)page_id.space() == srv_cust_space_id){ //customer
-			// block->page.read_cnt++;
-			// ib::info()<<"[read hit] cust "<<page_id.page_no();
-			srv_stats.tpcc_cust_buf_rd.inc();
+#ifdef UNIV_TPCC_MONITOR
+		if(is_tpcc_table(&block->page)){
+			tpcc_add_buf_rd(block, page_id.space(), buf_pool_index(buf_pool));
 		}
-
-		else if ((unsigned)page_id.space() == srv_dist_space_id){ //district
-			// ib::info()<<"[read hit] dist "<<page_id.page_no();
-			srv_stats.tpcc_dist_buf_rd.inc();
-		}
-
-		else if ((unsigned)page_id.space() == srv_his_space_id){ //history
-			// ib::info()<<"[read hit] his "<<page_id.page_no();
-			srv_stats.tpcc_his_buf_rd.inc();
-		}
-
-		else if ((unsigned)page_id.space() == srv_itm_space_id){ //item
-			// ib::info()<<"[read hit] itm "<<page_id.page_no();
-			srv_stats.tpcc_itm_buf_rd.inc();
-		}
-
-		else if ((unsigned)page_id.space() == srv_no_space_id){ //new orders
-			// ib::info()<<"[read hit] no "<<page_id.page_no();
-			srv_stats.tpcc_no_buf_rd.inc();
-		}
-
-		else if ((unsigned)page_id.space() == srv_ol_space_id){ //order_line
-			// ib::info()<<"[read hit] ol "<<page_id.page_no();
-			srv_stats.tpcc_ol_buf_rd.inc();
-		}
-
-		else if ((unsigned)page_id.space() == srv_or_space_id){ //orders
-			// ib::info()<<"[read hit] or "<<page_id.page_no();
-			srv_stats.tpcc_or_buf_rd.inc();
-		}
-
-		else if ((unsigned)page_id.space() == srv_stk_space_id){ //stock
-			// ib::info()<<"[read hit] stk "<<page_id.page_no();
-			srv_stats.tpcc_stk_buf_rd.inc();
-		}
-
-		else if ((unsigned)page_id.space() == srv_wh_space_id){ //warehouse
-			// ib::info()<<"[read hit] wh "<<page_id.page_no();
-			srv_stats.tpcc_wh_buf_rd.inc();
-		}
-		/**/
+#endif /*UNIV_TPCC_MONITOR*/
 
 	}
 
@@ -5299,10 +5279,17 @@ buf_page_init_low(
 	bpage->oldest_modification = 0;
 	HASH_INVALIDATE(bpage, hash);
 
+#ifdef UNIV_TPCC_MONITOR
+	bpage->buf_rd_cnt = 0;
+	bpage->disk_rd_cnt = 0;
+	bpage->cp_cnt = 0;
+	bpage->discard_cnt = 0;
+#endif /*UNIV_TPCC_MONITOR*/
 #ifdef UNIV_WARM_BUF_CACHE
+	/* Initialize the Warm Buffer page status */
     bpage->moved_to_warm_buf = false;
     if (bpage->buf_pool_index >= srv_buf_pool_instances) {
-        bpage->cached_in_warm_buf = true;    
+        bpage->cached_in_warm_buf = true;
     } else {
         bpage->cached_in_warm_buf = false;
     }
@@ -5430,15 +5417,15 @@ buf_page_init_for_read(
 	buf_pool_t* buf_pool;
 
 #ifdef UNIV_WARM_BUF_CACHE
-    if (mode == BUF_MOVE_TO_WARM_BUF) {
-		// buf_pool = &warm_buf_pool_ptr[0];
-		ulint       ignored_page_no = page_id.page_no() >> 6;
+    if (mode == BUF_MOVE_TO_WARM_BUF) { //FIXME
+		buf_pool = &warm_buf_pool_ptr[0];
+		// ulint       ignored_page_no = page_id.page_no() >> 6;
 
-		page_id_t   id(page_id.space(), ignored_page_no);
+		// page_id_t   id(page_id.space(), ignored_page_no);
 
-		ulint       i = id.fold() % srv_warm_buf_pool_instances;
+		// ulint       i = id.fold() % srv_warm_buf_pool_instances;
 
-		buf_pool = &warm_buf_pool_ptr[i];
+		// buf_pool = &warm_buf_pool_ptr[i];
 		
     } else { //mode is not BUF_MOVE_TO_WARM_BUF
         buf_pool = buf_pool_get(page_id);
@@ -5447,7 +5434,6 @@ buf_page_init_for_read(
 #else
     buf_pool = buf_pool_get(page_id);
 #endif /* UNIV_WARM_BUF_CACHE */
-
 
 	ut_ad(buf_pool);
 
@@ -5840,76 +5826,98 @@ buf_page_monitor(
 	case FIL_PAGE_INDEX:
 	case FIL_PAGE_RTREE:
 		level = btr_page_get_level_low(frame);
+		// ib::info()<<"monitor - 1 "<<bpage->id.space()<<" "<<bpage->id.page_no()<<" "<<bpage->buf_pool_index;
 
 		/* Check if it is an index page for insert buffer */
 		if (btr_page_get_index_id(frame)
 		    == (index_id_t)(DICT_IBUF_ID_MIN + IBUF_SPACE_ID)) {
+			// ib::info()<<"monitor - 2 "<<bpage->id.space()<<" "<<bpage->id.page_no()<<" "<<bpage->buf_pool_index;
+
 			if (level == 0) {
+				// ib::info()<<"monitor - 21 "<<bpage->id.space()<<" "<<bpage->id.page_no()<<" "<<bpage->buf_pool_index;
 				counter = MONITOR_RW_COUNTER(
 					io_type, MONITOR_INDEX_IBUF_LEAF_PAGE);
 			} else {
+				// ib::info()<<"monitor - 22 "<<bpage->id.space()<<" "<<bpage->id.page_no()<<" "<<bpage->buf_pool_index;
 				counter = MONITOR_RW_COUNTER(
 					io_type,
 					MONITOR_INDEX_IBUF_NON_LEAF_PAGE);
 			}
 		} else {
+			// ib::info()<<"monitor - 3 "<<bpage->id.space()<<" "<<bpage->id.page_no()<<" "<<bpage->buf_pool_index;
+
 			if (level == 0) {
+				// ib::info()<<"monitor - 31 "<<bpage->id.space()<<" "<<bpage->id.page_no()<<" "<<bpage->buf_pool_index;
 				counter = MONITOR_RW_COUNTER(
 					io_type, MONITOR_INDEX_LEAF_PAGE);
 			} else {
+				// ib::info()<<"monitor - 32 "<<bpage->id.space()<<" "<<bpage->id.page_no()<<" "<<bpage->buf_pool_index;
 				counter = MONITOR_RW_COUNTER(
 					io_type, MONITOR_INDEX_NON_LEAF_PAGE);
 			}
+
 		}
 		break;
 
 	case FIL_PAGE_UNDO_LOG:
+		// ib::info()<<"monitor - 4 "<<bpage->id.space()<<" "<<bpage->id.page_no()<<" "<<bpage->buf_pool_index;
 		counter = MONITOR_RW_COUNTER(io_type, MONITOR_UNDO_LOG_PAGE);
 		break;
 
 	case FIL_PAGE_INODE:
+		// ib::info()<<"monitor - 5 "<<bpage->id.space()<<" "<<bpage->id.page_no()<<" "<<bpage->buf_pool_index;
 		counter = MONITOR_RW_COUNTER(io_type, MONITOR_INODE_PAGE);
 		break;
 
 	case FIL_PAGE_IBUF_FREE_LIST:
+		// ib::info()<<"monitor - 6 "<<bpage->id.space()<<" "<<bpage->id.page_no()<<" "<<bpage->buf_pool_index;
 		counter = MONITOR_RW_COUNTER(io_type,
 					     MONITOR_IBUF_FREELIST_PAGE);
 		break;
 
 	case FIL_PAGE_IBUF_BITMAP:
+		// ib::info()<<"monitor - 7 "<<bpage->id.space()<<" "<<bpage->id.page_no()<<" "<<bpage->buf_pool_index;
 		counter = MONITOR_RW_COUNTER(io_type,
 					     MONITOR_IBUF_BITMAP_PAGE);
 		break;
 
 	case FIL_PAGE_TYPE_SYS:
+		// ib::info()<<"monitor - 8 "<<bpage->id.space()<<" "<<bpage->id.page_no()<<" "<<bpage->buf_pool_index;
 		counter = MONITOR_RW_COUNTER(io_type, MONITOR_SYSTEM_PAGE);
 		break;
 
 	case FIL_PAGE_TYPE_TRX_SYS:
+		// ib::info()<<"monitor - 9 "<<bpage->id.space()<<" "<<bpage->id.page_no()<<" "<<bpage->buf_pool_index;
 		counter = MONITOR_RW_COUNTER(io_type, MONITOR_TRX_SYSTEM_PAGE);
 		break;
 
 	case FIL_PAGE_TYPE_FSP_HDR:
+		// ib::info()<<"monitor - 10 "<<bpage->id.space()<<" "<<bpage->id.page_no()<<" "<<bpage->buf_pool_index;
 		counter = MONITOR_RW_COUNTER(io_type, MONITOR_FSP_HDR_PAGE);
 		break;
 
 	case FIL_PAGE_TYPE_XDES:
+		// ib::info()<<"monitor - 11 "<<bpage->id.space()<<" "<<bpage->id.page_no()<<" "<<bpage->buf_pool_index;
 		counter = MONITOR_RW_COUNTER(io_type, MONITOR_XDES_PAGE);
 		break;
 
 	case FIL_PAGE_TYPE_BLOB:
+		// ib::info()<<"monitor - 12 "<<bpage->id.space()<<" "<<bpage->id.page_no()<<" "<<bpage->buf_pool_index;
 		counter = MONITOR_RW_COUNTER(io_type, MONITOR_BLOB_PAGE);
 		break;
 
 	case FIL_PAGE_TYPE_ZBLOB:
+		// ib::info()<<"monitor - 13 "<<bpage->id.space()<<" "<<bpage->id.page_no()<<" "<<bpage->buf_pool_index;
 		counter = MONITOR_RW_COUNTER(io_type, MONITOR_ZBLOB_PAGE);
 		break;
 
 	case FIL_PAGE_TYPE_ZBLOB2:
+		// ib::info()<<"monitor - 14 "<<bpage->id.space()<<" "<<bpage->id.page_no()<<" "<<bpage->buf_pool_index;
 		counter = MONITOR_RW_COUNTER(io_type, MONITOR_ZBLOB2_PAGE);
 		break;
 
 	default:
+		// ib::info()<<"monitor - 15 "<<bpage->id.space()<<" "<<bpage->id.page_no()<<" "<<bpage->buf_pool_index;
 		counter = MONITOR_RW_COUNTER(io_type, MONITOR_OTHER_PAGE);
 	}
 
@@ -5970,7 +5978,7 @@ the buffer pool.
 @return true if successful */
 bool
 buf_page_io_complete(
-/*=================*/
+  
 	buf_page_t*	bpage,	/*!< in: pointer to the block in question */
 	bool		evict)	/*!< in: whether or not to evict the page
 				from LRU list. */
@@ -6012,7 +6020,6 @@ buf_page_io_complete(
 			}
 			buf_pool->n_pend_unzip--;
 		} else {
-
 			ut_a(uncompressed);
 			frame = ((buf_block_t*) bpage)->frame;
 		}
@@ -6026,9 +6033,9 @@ buf_page_io_complete(
 
 		if (bpage->id.space() == TRX_SYS_SPACE
 		    && buf_dblwr_page_inside(bpage->id.page_no())) {
-
 			ib::error() << "Reading page " << bpage->id
 				<< ", which is in the doublewrite buffer!";
+			
 
 		} else if (read_space_id == 0 && read_page_no == 0) {
 			/* This is likely an uninitialized page. */
@@ -6039,7 +6046,6 @@ buf_page_io_complete(
 			if bpage->space == 0, because the field on the
 			page may contain garbage in MySQL < 4.1.1,
 			which only supported bpage->space == 0. */
-
 			ib::error() << "Space id and page no stored in "
 				"the page, read in are "
 				<< page_id_t(read_space_id, read_page_no)
@@ -6052,7 +6058,6 @@ buf_page_io_complete(
 		that we are reading in a page for which this instance doesn't
 		support the compression algorithm. */
 		if (compressed_page) {
-
 			Compression::meta_t	meta;
 
 			Compression::deserialize_header(frame, &meta);
@@ -6066,11 +6071,11 @@ buf_page_io_complete(
 
 		/* From version 3.23.38 up we store the page checksum
 		to the 4 first bytes of the page end lsn field */
+
 		if (compressed_page
 		    || buf_page_is_corrupted(
 			    true, frame, bpage->size,
 			    fsp_is_checksum_disabled(bpage->id.space()))) {
-
 			/* Not a real corruption if it was triggered by
 			error injection */
 			DBUG_EXECUTE_IF(
@@ -6089,7 +6094,6 @@ corrupt:
 			/* Compressed pages are basically gibberish avoid
 			printing the contents. */
 			if (!compressed_page) {
-
 				ib::error()
 					<< "Database page corruption on disk"
 					" or a failed file read of page "
@@ -6123,7 +6127,6 @@ corrupt:
 
 				if (bpage->id.space() > TRX_SYS_SPACE
 				    && buf_mark_space_corrupt(bpage)) {
-
 					return(false);
 				} else {
 					ib::fatal()
@@ -6156,15 +6159,14 @@ corrupt:
 		    && !srv_is_tablespace_truncated(bpage->id.space())
 		    && fil_page_get_type(frame) == FIL_PAGE_INDEX
 		    && page_is_leaf(frame)) {
-
 			ibuf_merge_or_delete_for_page(
 				(buf_block_t*) bpage, bpage->id,
 				&bpage->size, TRUE);
 		}
 	}
 
-	buf_pool_mutex_enter(buf_pool);
-	mutex_enter(buf_page_get_mutex(bpage));
+		buf_pool_mutex_enter(buf_pool);
+		mutex_enter(buf_page_get_mutex(bpage));
 
 #ifdef UNIV_IBUF_COUNT_DEBUG
 	if (io_type == BUF_IO_WRITE || uncompressed) {
@@ -6187,7 +6189,6 @@ corrupt:
 		/* NOTE that the call to ibuf may have moved the ownership of
 		the x-latch to this OS thread: do not let this confuse you in
 		debugging! */
-
 		ut_ad(buf_pool->n_pend_reads > 0);
 		buf_pool->n_pend_reads--;
 		buf_pool->stat.n_pages_read++;
@@ -6198,9 +6199,8 @@ corrupt:
 		}
 
 #ifdef UNIV_WARM_BUF_CACHE 
-
+ 		// buf_io_complete(flush 시 호출) 호출했더니 warm buf에 캐싱되어 있더라
         if (bpage->cached_in_warm_buf) {
-			/// buf_io_complete(flush 시 호출) 호출했더니 warm buf에 캐싱되어 있더라
             if (bpage->id.space() == srv_ol_space_id) {
                 srv_stats.warm_buf_pages_stored_ol.inc();
             } else if (bpage->id.space() == srv_stk_space_id) {
@@ -6217,7 +6217,6 @@ corrupt:
 	case BUF_IO_WRITE:
 		/* Write means a flush operation: call the completion
 		routine in the flush system */
-
 		buf_flush_write_complete(bpage); //Updates the flush system data structures when a write is completed,
 										// remove a block from flush list
 
@@ -6229,7 +6228,7 @@ corrupt:
 		buf_pool->stat.n_pages_written++;
 
 #ifdef UNIV_WARM_BUF_CACHE 
-		//flush가 필요한 페이지
+		//flush됨 -> flush list에서도 사라짐
         if (bpage->cached_in_warm_buf) {
             if (bpage->id.space() == srv_ol_space_id ) {
                 srv_stats.warm_buf_pages_written_ol.inc();
@@ -6256,7 +6255,7 @@ corrupt:
 		by the caller explicitly. */
 		if (buf_page_get_flush_type(bpage) == BUF_FLUSH_LRU  //ky: 만약 현재 flush type이 LRU면 LRU list에서 제거, free list로 옮김
 #ifdef UNIV_WARM_BUF_CACHE
-			|| bpage->moved_to_warm_buf //원래 normal buffer에 있었으나 flush 했다고 속이고 LRU list에서 제거
+			|| bpage->moved_to_warm_buf  //원래 normal buffer에 있었으나 flush 했다고 속이고 LRU list에서 제거
 #endif /*UNIV_WARM_BUF_CACHE*/
 		) {
 			evict = true;

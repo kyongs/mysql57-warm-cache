@@ -1931,21 +1931,21 @@ innobase_start_or_create_for_mysql(void)
 	while (!buf_page_cleaner_is_active) {
 		os_thread_sleep(10000);
 	}
+	
 #ifdef UNIV_WARM_BUF_CACHE
 	warm_buf_flush_page_cleaner_init();
-	// os_thread_create(buf_flush_warm_buf_page_cleaner_thread, NULL, NULL);
-	os_thread_create(warm_buf_flush_page_cleaner_coordinator,
-			 NULL, NULL);
+	
+	os_thread_create(warm_buf_flush_page_cleaner_coordinator, NULL, NULL);
 
 	for (i = 1; i < warm_buf_srv_n_page_cleaners; ++i) {
-		os_thread_create(warm_buf_flush_page_cleaner_worker,
-				 NULL, NULL);
+		os_thread_create(warm_buf_flush_page_cleaner_worker, NULL, NULL);
 	}
 
 	/* Make sure page cleaner is active. */
 	while (!warm_buf_page_cleaner_is_active) {
 		os_thread_sleep(10000);
 	}
+
 	ib::info()<<"[ky] warm buf page cleaner thread create completed!";
 #endif /* UNIV_WARM_BUF_CACHE */
 

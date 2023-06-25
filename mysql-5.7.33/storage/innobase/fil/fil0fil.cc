@@ -916,7 +916,8 @@ add_size:
 		UT_LIST_ADD_FIRST(fil_system->LRU, node);
 	}
 
-/*kyong - tablespace*/
+#ifdef UNIV_TPCC_MONITOR
+	/*kyong - tablespace*/
 	if (strcmp(node->name, "./tpcc/customer.ibd") == 0) {
 		srv_cust_space_id = space->id;
 		fprintf(stderr, "setting %s to %lu\n", node->name, srv_cust_space_id);
@@ -927,32 +928,32 @@ add_size:
 		fprintf(stderr, "setting %s to %lu\n", node->name, srv_dist_space_id);
 	}
 
-  if (strcmp(node->name, "./tpcc/history.ibd") == 0) {
+	if (strcmp(node->name, "./tpcc/history.ibd") == 0) {
 		srv_his_space_id = space->id;
 		fprintf(stderr, "setting %s to %lu\n", node->name, srv_his_space_id);
 	}
 
-  if (strcmp(node->name, "./tpcc/item.ibd") == 0) {
+	if (strcmp(node->name, "./tpcc/item.ibd") == 0) {
 		srv_itm_space_id = space->id;
 		fprintf(stderr, "setting %s to %lu\n", node->name, srv_itm_space_id);
 	}
 
-  if (strcmp(node->name, "./tpcc/new_orders.ibd") == 0) {
+	if (strcmp(node->name, "./tpcc/new_orders.ibd") == 0) {
 		srv_no_space_id = space->id;
 		fprintf(stderr, "setting %s to %lu\n", node->name, srv_no_space_id);
 	}
 
-  if (strcmp(node->name, "./tpcc/order_line.ibd") == 0) {
+	if (strcmp(node->name, "./tpcc/order_line.ibd") == 0) {
 		srv_ol_space_id = space->id;
 		fprintf(stderr, "setting %s to %lu\n", node->name, srv_ol_space_id);
 	}
 
-  if (strcmp(node->name, "./tpcc/orders.ibd") == 0) {
+	if (strcmp(node->name, "./tpcc/orders.ibd") == 0) {
 		srv_or_space_id = space->id;
 		fprintf(stderr, "setting %s to %lu\n", node->name, srv_or_space_id);
 	}
 
-  if (strcmp(node->name, "./tpcc/stock.ibd") == 0) {
+	if (strcmp(node->name, "./tpcc/stock.ibd") == 0) {
 		srv_stk_space_id = space->id;
 		fprintf(stderr, "setting %s to %lu\n", node->name, srv_stk_space_id);
 	}
@@ -963,7 +964,7 @@ add_size:
 	}
 
 	fprintf(stderr, "%s: %lu\n", node->name, space->id);
-  /**/
+#endif /* UNIV_TPCC_MONITOR*/
 
 	return(true);
 }

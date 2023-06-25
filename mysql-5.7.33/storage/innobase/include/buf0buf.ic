@@ -1037,18 +1037,16 @@ buf_pool_get(
 {
 #ifdef UNIV_WARM_BUF_CACHE
 
-	// 만약 warm buf pool에 있는 페이지라면 
+	// Check if the page is in Warm Buffer
 	for (int warm_idx = 0; warm_idx < srv_warm_buf_pool_instances; warm_idx++){
 		if (buf_page_hash_get_low(&warm_buf_pool_ptr[warm_idx], page_id)){
 			return &warm_buf_pool_ptr[warm_idx];
 		}
 	}
 
-    /* 2log of BUF_READ_AHEAD_AREA (64) */
+	/* If the page is not in warm buffer, the page must be stored in original buffer*/
     ulint       ignored_page_no = page_id.page_no() >> 6;
-
     page_id_t   id(page_id.space(), ignored_page_no);
-
     ulint       i = id.fold() % srv_buf_pool_instances;
 
     return(&buf_pool_ptr[i]);

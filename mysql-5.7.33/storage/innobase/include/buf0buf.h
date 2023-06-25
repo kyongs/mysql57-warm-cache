@@ -379,8 +379,6 @@ warm_buf_pool_free(
 /*==========*/
 	ulint	n_instances);	/*!< in: numbere of instances to free */
 
-/** Checks whether this page should be moved to the WARM buffer. */
-bool buf_block_will_be_moved_to_warm_buf(const page_id_t& page_id);
 #endif /* UNIV_WARM_BUF_CACHE */
 
 /********************************************************************//**
@@ -460,10 +458,12 @@ zero if all modified pages have been flushed to disk.
 @return oldest modification in pool, zero if none */
 lsn_t
 buf_pool_get_oldest_modification(void);
+
 /*==================================*/
-#ifdef UNIV_WARM_BUF_CACHE
-lsn_t warm_buf_pool_get_oldest_modification(void);
-#endif /*UNIV_WARM_BUF_CACHE*/
+// #ifdef UNIV_WARM_BUF_CACHE
+// /*Gets the smallest oldest_modification lsn for any page in the warm buffer pool.*/
+// lsn_t warm_buf_pool_get_oldest_modification(void);
+// #endif /*UNIV_WARM_BUF_CACHE*/
 
 /********************************************************************//**
 Allocates a buf_page_t descriptor. This function must succeed. In case
@@ -1712,13 +1712,22 @@ public:
 					or buf_block_t::mutex. */
 # endif /* UNIV_DEBUG */
 #endif /* !UNIV_HOTBACKUP */
+
+#ifdef UNIV_TPCC_MONITOR
+	ulint disk_rd_cnt; /**/
+
+	ulint buf_rd_cnt; /**/
+
+	ulint cp_cnt; /**/
+
+	ulint discard_cnt; /**/
+#endif /*UNIV_TPCC_MONITOR*/
+
 #ifdef UNIV_WARM_BUF_CACHE
     bool cached_in_warm_buf; /*!< TRUE if the page is cached
                              in the WARM buffer */
     bool moved_to_warm_buf;  /*!< TRUE if the page needs to
                              be moved to the WARM buffer */
-	// ib_uint32_t updated_count; 
-	// unsigned	read_cnt;
 #endif /* UNIV_WARM_BUF_CACHE */
 };
 

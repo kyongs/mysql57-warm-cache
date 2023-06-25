@@ -1081,8 +1081,14 @@ buf_LRU_free_from_common_LRU_list(
 
 		unsigned	accessed = buf_page_is_accessed(bpage);
 
+#ifdef UNIV_TPCC_MONITOR
+		srv_stats.tpcc_lru_scan.inc();
+#endif /*UNIV_TPCC_MONITOR*/
 		if (buf_flush_ready_for_replace(bpage)) {
 			mutex_exit(mutex);
+#ifdef UNIV_TPCC_MONITOR
+			bpage->discard_cnt++; // clean page이므로 그냥 discard 
+#endif /*UNIV_TPCC_MONITOR*/
 			freed = buf_LRU_free_page(bpage, true); //ky: LRU list를 돌면서 free page가 될수있는지 이 함수에서 확인
 		} else {
 			mutex_exit(mutex);
@@ -1334,6 +1340,10 @@ loop: //ky: 루프를 돌면서 계속 사용가능한 블럭이 있는지 확�
 
 	if (block != NULL) { //ky: 만약 블럭이 있으면 free list에서 블럭 가져와서 리턴하면서 이 함수를 벗어남
 
+#ifdef UNIV_TPCC_MONITOR
+	srv_stats.tpcc_fpage_list.inc();
+#endif /*UNIV_TPCC_MONITOR*/
+
 		buf_pool_mutex_exit(buf_pool);
 		ut_ad(buf_pool_from_block(block) == buf_pool);
 		memset(&block->page.zip, 0, sizeof block->page.zip);
@@ -1436,12 +1446,13 @@ loop: //ky: 루프를 돌면서 계속 사용가능한 블럭이 있는지 확�
 	involved (particularly in case of compressed pages). We
 	can do that in a separate patch sometime in future. */
 	if (!buf_flush_single_page_from_LRU(buf_pool)) {//ky: 만약 clean page도 없고 free block도 없는경우 single page로 감
-													// 이 경우 scan depth만큼 search하는 것이 아닌, flush 할수있는 dirty페이지를 만날때까지 scan을 함
+		
+		ib::info()<<buf_pool->instance_no<<" single page flush";
 		MONITOR_INC(MONITOR_LRU_SINGLE_FLUSH_FAILURE_COUNT);
 		++flush_failures;
-		if (buf_pool->instance_no == srv_buf_pool_instances){
-			ib::info()<<"single page flush in warm buf";
-		}
+		// if (buf_pool->instance_no == srv_buf_pool_instances){
+		// 	ib::info()<<"single page flush in warm buf";
+		// }
 	}
 
 	srv_stats.buf_pool_wait_free.add(n_iterations, 1);

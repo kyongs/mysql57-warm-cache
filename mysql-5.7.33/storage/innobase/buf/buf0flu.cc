@@ -69,6 +69,10 @@ Created 11/11/1995 Heikki Tuuri
 static const int buf_flush_page_cleaner_priority = -20;
 #endif /* UNIV_LINUX */
 
+#ifdef UNIV_TPCC_MONITOR
+#include "tpcc0mon.h"
+#endif /*UNIV_TPCC_MONITOR*/
+
 /** Sleep time in microseconds for loop waiting for the oldest
 modification lsn */
 static const ulint buf_flush_wait_flushed_sleep_time = 10000;
@@ -1007,6 +1011,7 @@ buf_flush_init_for_writing(
 			checksum);
 }
 
+
 #ifndef UNIV_HOTBACKUP
 /********************************************************************//**
 Does an asynchronous write of a buffer page. NOTE: in simulated aio and
@@ -1053,13 +1058,8 @@ buf_flush_write_block_low(
 
 	/* Force the log to the disk before writing the modified block */
 	if (!srv_read_only_mode) {
-// #ifdef UNIV_WARM_BUF_CACHE
-// 			if (bpage->buf_pool_index < srv_buf_pool_instances) {
-// 				log_write_up_to(bpage->newest_modification, true);
-// 			}
-// #else
-			log_write_up_to(bpage->newest_modification, true);
-// #endif /* UNIV_WARM_BUF_CACHE */
+		//[ky] 참고: NV-SQL에서는 이 부분에 로깅이 필요없기 때문에 warm buffer가 아닌 경우에만 log write 적용
+		log_write_up_to(bpage->newest_modification, true);
 	}
 
 	switch (buf_page_get_state(bpage)) {
@@ -1101,9 +1101,13 @@ buf_flush_write_block_low(
 #ifdef UNIV_WARM_BUF_CACHE
     if (bpage->moved_to_warm_buf
         && bpage->buf_pool_index < srv_buf_pool_instances
-        && bpage->buf_fix_count == 0) {
-    
-		/* warm buffer page 생성*/
+        && bpage->buf_fix_count == 0
+		&& page_is_leaf(((buf_block_t*) bpage)->frame) //only leaf
+		&& is_tpcc_table(bpage) //only tpcc table 
+		&& bpage->id.page_no() > 7 //not header pages
+		// && dict_index_is_clust(((buf_block_t*) bpage)->index) 
+		) {
+		/* Generate warm buffer page */
         buf_page_t *warm_buf_page;
         page_id_t page_id(bpage->id.space(), bpage->id.page_no());
         const page_size_t page_size = page_size_t(bpage->size.logical(), bpage->size.logical(), false);
@@ -1112,39 +1116,30 @@ buf_flush_write_block_low(
         /* Add the target page to the WARM_BUF buffer. */
         warm_buf_page = buf_page_init_for_read(&err, BUF_MOVE_TO_WARM_BUF, page_id, page_size, false);
         
-        if (warm_buf_page == NULL)    goto normal;
+        if (warm_buf_page == NULL)     goto normal;
 
-		/* statistics -> warm buffer로 이동하는 페이지 개수 */
-		if(bpage->id.space() == srv_stk_space_id){
-            srv_stats.move_to_warm_buf_cnt_stk.inc();
-        } else if (bpage->id.space() == srv_cust_space_id){
-            srv_stats.move_to_warm_buf_cnt_cust.inc();
-        } else if (bpage->id.space() == srv_ol_space_id){
-            srv_stats.move_to_warm_buf_cnt_ol.inc();
-        }
+		// ib::info() << "page_id = " << bpage->id.space()
+        // << " offset = " << bpage->id.page_no() 
+        // << " dst = " << &(((buf_block_t *)warm_buf_page)->frame) << " src = " << &(((buf_block_t *)bpage)->frame)
+        // << " flush-type = " << bpage->flush_type;
 
-		//memory copy
-        memcpy(((buf_block_t *)warm_buf_page)->frame, ((buf_block_t *)bpage)->frame, UNIV_PAGE_SIZE);
+		memcpy(((buf_block_t *)warm_buf_page)->frame, ((buf_block_t *)bpage)->frame, UNIV_PAGE_SIZE);
 
-        /* Set the oldest LSN of the WARM_BUF page to the previous newest LSN. */
-        buf_flush_note_modification((buf_block_t *)warm_buf_page, bpage->oldest_modification, bpage->newest_modification, warm_buf_page->flush_observer);
-        // buf_flush_note_modification((buf_block_t *)warm_buf_page, bpage->newest_modification, bpage->newest_modification, warm_buf_page->flush_observer);
+		// srv_stats.tpcc_move_to_warm_buf.inc();
 
-        // TODO: WARM_BUF-porting
-        // 1
-        // flush_cache(((buf_block_t *)warm_buf_page)->frame, UNIV_PAGE_SIZE);
-        // 2
-        
-        /* Remove the target page from the original buffer pool. */
-        buf_page_io_complete(bpage, true); //기존 normal buffer의 페이지는 
-        buf_page_io_complete(warm_buf_page);
+		// /* Set the oldest LSN of the warm buf page smae as bpage LSN */
+		
+		buf_flush_note_modification((buf_block_t *)warm_buf_page, bpage->oldest_modification, bpage->newest_modification, warm_buf_page->flush_observer);
+		// ib::info() << warm_buf_page->id.space() << " "
+        //          << warm_buf_page->id.page_no() << " is moved to "
+        //          << warm_buf_page->buf_pool_index << " from " << bpage->buf_pool_index;
+        // }
+		// ib::info()<<"bpage         "<<bpage->id.space()<<" "<<bpage->id.page_no()<<" ";
+		// ib::info()<<"warm_buf_page "<<warm_buf_page->id.space()<<" "<<warm_buf_page->id.page_no()<<""; //<<warm_buf_page->in_flush_list;
+		buf_page_io_complete(bpage, true); // 	bpage는 flush list에서 제거, lru list에서도 제거 //io_type: write, evict true, evict if문
+		buf_page_io_complete(warm_buf_page); // //io_type: read, BUF_IO_READ else, BUF_IO_READ // buf_page_set_io_fix to BUF_IO_NONE > pending read수 줄이고 끝
 
-        // buf_pool_t*	buf_pool = buf_pool_from_bpage(warm_buf_page);
-		// if((unsigned)bpage->id.space() == srv_cust_space_id){ 
-			// ib::info() << warm_buf_page->id.space() << " "
-			// 		<< warm_buf_page->id.page_no() << " is moved to "
-			// 		<< warm_buf_page->buf_pool_index << " from " << bpage->buf_pool_index;
-		// }
+		// 여기에서 flush list로 들어가는지 등을 확인해봐야함
 
     } else {
 normal:
@@ -1159,221 +1154,20 @@ normal:
                 << " newest: " << bpage->newest_modification
                 << " lsn-gap: " << bpage->newest_modification - bpage->oldest_modification;*/
 
-		 if(bpage->id.space() == srv_stk_space_id){
-            srv_stats.stay_in_buf_cnt_stk.inc();
-        } else if (bpage->id.space() == srv_cust_space_id){
-            srv_stats.stay_in_buf_cnt_cust.inc();
-        } else if (bpage->id.space() == srv_ol_space_id){
-            srv_stats.stay_in_buf_cnt_ol.inc();
-        }
-		/*kyong - write*/
-        if ((unsigned)bpage->id.space() == srv_cust_space_id){ //customer
+		/* move to warm buf statistics */
+		// if(bpage->id.space() == srv_stk_space_id){
+		// 	srv_stats.stay_in_buf_cnt_stk.inc();
+		// } else if (bpage->id.space() == srv_cust_space_id){
+		// 	srv_stats.stay_in_buf_cnt_cust.inc();
+		// } else if (bpage->id.space() == srv_ol_space_id){
+		// 	srv_stats.stay_in_buf_cnt_ol.inc();
+		// }		
 
-            //increate write count
-            srv_stats.tpcc_cust_total_wr.inc();
-
-            //increase flush type per write
-            if(bpage->flush_type == BUF_FLUSH_LRU){
-            	srv_stats.tpcc_cust_lru_wr.inc();
-				// ib::info()<<"[write] cust "<<bpage->id.page_no()<<" flush_type: LRU";
-
-				if(bpage->buf_pool_index == srv_buf_pool_instances){
-					srv_stats.tpcc_cust_warm_lru.inc();
-				} else {
-					srv_stats.tpcc_cust_normal_lru.inc();
-				}
-            }
-            else if(bpage->flush_type == BUF_FLUSH_LIST){
-            	srv_stats.tpcc_cust_cp_wr.inc();
-				// ib::info()<<"[write] cust "<<bpage->id.page_no()<<" flush_type: CP";
-
-				if(bpage->buf_pool_index == srv_buf_pool_instances){
-					srv_stats.tpcc_cust_warm_cp.inc();
-				} else {
-					srv_stats.tpcc_cust_normal_cp.inc();
-				}
-            }
-            else if (bpage->flush_type == BUF_FLUSH_SINGLE_PAGE) {
-            	srv_stats.tpcc_cust_sp_wr.inc();
-				// ib::info()<<"[write] cust "<<bpage->id.page_no()<<" flush_type: SP";
-
-				if(bpage->buf_pool_index == srv_buf_pool_instances){
-					srv_stats.tpcc_cust_warm_sp.inc();
-				} else {
-					srv_stats.tpcc_cust_normal_sp.inc();
-				}
-            }
-        }
-
-        else if ((unsigned)bpage->id.space() == srv_dist_space_id){ //district
-            //increate write count
-            srv_stats.tpcc_dist_total_wr.inc();
-
-            //increase flush type per write
-            if(bpage->flush_type == BUF_FLUSH_LRU){
-            	srv_stats.tpcc_dist_lru_wr.inc();
-				// ib::info()<<"[write] dist "<<bpage->id.page_no()<<" flush_type: LRU";
-            }
-            else if(bpage->flush_type == BUF_FLUSH_LIST){
-            	srv_stats.tpcc_dist_cp_wr.inc();
-				// ib::info()<<"[write] dist "<<bpage->id.page_no()<<" flush_type: CP";
-            }
-            else if (bpage->flush_type == BUF_FLUSH_SINGLE_PAGE) {
-            	srv_stats.tpcc_dist_sp_wr.inc();
-				// ib::info()<<"[write] dist "<<bpage->id.page_no()<<" flush_type: SP";
-            }
-
-        }
-
-        else if ((unsigned)bpage->id.space() == srv_his_space_id){ //history
-            //increate write count
-            srv_stats.tpcc_his_total_wr.inc();
-
-            //increase flush type per write
-            if(bpage->flush_type == BUF_FLUSH_LRU){
-            	srv_stats.tpcc_his_lru_wr.inc();
-				// ib::info()<<"[write] his "<<bpage->id.page_no()<<" flush_type: LRU";
-            }
-            else if(bpage->flush_type == BUF_FLUSH_LIST){
-            	srv_stats.tpcc_his_cp_wr.inc();
-				// ib::info()<<"[write] his "<<bpage->id.page_no()<<" flush_type: CP";
-            }
-            else if (bpage->flush_type == BUF_FLUSH_SINGLE_PAGE) {
-            	srv_stats.tpcc_his_sp_wr.inc();
-				// ib::info()<<"[write] his "<<bpage->id.page_no()<<" flush_type: SP";
-            }
-        }
-
-        else if ((unsigned)bpage->id.space() == srv_itm_space_id){ //item
-            //increate write count
-            srv_stats.tpcc_itm_total_wr.inc();
-
-            //increase flush type per write
-            if(bpage->flush_type == BUF_FLUSH_LRU){
-            	srv_stats.tpcc_itm_lru_wr.inc();
-            }
-            else if(bpage->flush_type == BUF_FLUSH_LIST){
-            	srv_stats.tpcc_itm_cp_wr.inc();
-            }
-            else if (bpage->flush_type == BUF_FLUSH_SINGLE_PAGE) {
-            	srv_stats.tpcc_itm_sp_wr.inc();
-            }
-        }
-
-        else if ((unsigned)bpage->id.space() == srv_no_space_id){ //new orders
-            //increate write count
-            srv_stats.tpcc_no_total_wr.inc();
-
-            //increase flush type per write
-            if(bpage->flush_type == BUF_FLUSH_LRU){
-            	srv_stats.tpcc_no_lru_wr.inc();
-				// ib::info()<<"[write] no "<<bpage->id.page_no()<<" flush_type: LRU";
-            }
-            else if(bpage->flush_type == BUF_FLUSH_LIST){
-            	srv_stats.tpcc_no_cp_wr.inc();
-				// ib::info()<<"[write] no "<<bpage->id.page_no()<<" flush_type: CP";
-            }
-            else if (bpage->flush_type == BUF_FLUSH_SINGLE_PAGE) {
-            	srv_stats.tpcc_no_sp_wr.inc();
-				// ib::info()<<"[write] no "<<bpage->id.page_no()<<" flush_type: SP";
-            }
-        }
-
-        else if ((unsigned)bpage->id.space() == srv_ol_space_id){ //order_line
-            //increate write count
-            srv_stats.tpcc_ol_total_wr.inc();
-
-            //increase flush type per write
-            if(bpage->flush_type == BUF_FLUSH_LRU){
-            	srv_stats.tpcc_ol_lru_wr.inc();
-				// ib::info()<<"[write] ol "<<bpage->id.page_no()<<" flush_type: LRU";
-            }
-            else if(bpage->flush_type == BUF_FLUSH_LIST){
-            	srv_stats.tpcc_ol_cp_wr.inc();
-				// ib::info()<<"[write] ol "<<bpage->id.page_no()<<" flush_type: CP";
-            }
-            else if (bpage->flush_type == BUF_FLUSH_SINGLE_PAGE) {
-            	srv_stats.tpcc_ol_sp_wr.inc();
-				// ib::info()<<"[write] ol "<<bpage->id.page_no()<<" flush_type: SP";
-            }
-        }
-
-        else if ((unsigned)bpage->id.space() == srv_or_space_id){ //orders
-			
-            //increate write count
-            srv_stats.tpcc_or_total_wr.inc();
-
-            //increase flush type per write
-            if(bpage->flush_type == BUF_FLUSH_LRU){
-				srv_stats.tpcc_or_lru_wr.inc();
-				// ib::info()<<"[write] or "<<bpage->id.page_no()<<" flush_type: LRU";
-            }
-            else if(bpage->flush_type == BUF_FLUSH_LIST){
-				srv_stats.tpcc_or_cp_wr.inc();
-				// ib::info()<<"[write] or "<<bpage->id.page_no()<<" flush_type: CP";
-            }
-            else if (bpage->flush_type == BUF_FLUSH_SINGLE_PAGE) {
-				srv_stats.tpcc_or_sp_wr.inc();
-				// ib::info()<<"[write] or "<<bpage->id.page_no()<<" flush_type: SP";
-            }
-        }
-
-        else if ((unsigned)bpage->id.space() == srv_stk_space_id){ //stock
-            //increate write count
-            srv_stats.tpcc_stk_total_wr.inc();
-
-            //increase flush type per write
-            if(bpage->flush_type == BUF_FLUSH_LRU){
-            	srv_stats.tpcc_stk_lru_wr.inc();
-				// ib::info()<<"[write] stk "<<bpage->id.page_no()<<" flush_type: LRU";
-
-				if(bpage->buf_pool_index == srv_buf_pool_instances){
-					srv_stats.tpcc_stk_warm_lru.inc();
-				} else {
-					srv_stats.tpcc_stk_normal_lru.inc();
-				}
-            }
-            else if(bpage->flush_type == BUF_FLUSH_LIST){
-            	srv_stats.tpcc_stk_cp_wr.inc();
-				// ib::info()<<"[write] stk "<<bpage->id.page_no()<<" flush_type: CP";
-
-				if(bpage->buf_pool_index == srv_buf_pool_instances){
-					srv_stats.tpcc_stk_warm_cp.inc();
-				} else {
-					srv_stats.tpcc_stk_normal_cp.inc();
-				}
-            }
-            else if (bpage->flush_type == BUF_FLUSH_SINGLE_PAGE) {
-            	srv_stats.tpcc_stk_sp_wr.inc();
-				// ib::info()<<"[write] stk "<<bpage->id.page_no()<<" flush_type: SP";
-
-				if(bpage->buf_pool_index == srv_buf_pool_instances){
-					srv_stats.tpcc_stk_warm_sp.inc();
-				} else {
-					srv_stats.tpcc_stk_normal_sp.inc();
-				}
-            }
-        }
-
-        else if ((unsigned)bpage->id.space() == srv_wh_space_id){ //warehouse
-            //increate write count
-            srv_stats.tpcc_wh_total_wr.inc();
-
-            //increase flush type per write
-            if(bpage->flush_type == BUF_FLUSH_LRU){
-            	srv_stats.tpcc_wh_lru_wr.inc();
-				// ib::info()<<"[write] wh "<<bpage->id.page_no()<<" flush_type: LRU";
-            }
-            else if(bpage->flush_type == BUF_FLUSH_LIST){
-            	srv_stats.tpcc_wh_cp_wr.inc();
-				// ib::info()<<"[write] wh "<<bpage->id.page_no()<<" flush_type: CP";
-            }
-            else if (bpage->flush_type == BUF_FLUSH_SINGLE_PAGE) {
-            	srv_stats.tpcc_wh_sp_wr.inc();
-				// ib::info()<<"[write] wh "<<bpage->id.page_no()<<" flush_type: SP";
-            }
-        }
-
+#ifdef UNIV_TPCC_MONITOR
+		if(is_tpcc_table(bpage)){
+			tpcc_add_write_type(bpage, flush_type, bpage->buf_pool_index); 
+		}
+#endif /*UNIV_TPCC_MONITOR*/
 
         if (!srv_use_doublewrite_buf
             || buf_dblwr == NULL
@@ -1401,13 +1195,16 @@ normal:
             
             fil_io(request,
                     sync, bpage->id, bpage->size, 0, bpage->size.physical(),
-                    frame, bpage); 
+                    frame, bpage);
 
             // jhpark: write oldest_modification_lsn of current WARM-BUF-caching page
             // pm_mmap_write_logfile_header_lsn(bpage->oldest_modification);
 
         } else if (flush_type == BUF_FLUSH_SINGLE_PAGE) {
+			
             buf_dblwr_write_single_page(bpage, sync);
+			// ib::info()<<"[ky] single page flush: "<<sync;
+			
         } else {
             ut_ad(!sync);
             buf_dblwr_add_to_batch(bpage);
@@ -1416,10 +1213,10 @@ normal:
            and we flush the changes to disk only for the tablespace we
            are working on. */
         if (sync) {
-            if (!bpage->cached_in_warm_buf) { /// FIXME
-                ut_ad(flush_type == BUF_FLUSH_SINGLE_PAGE);
-                fil_flush(bpage->id.space());
-            }
+            // if (!bpage->cached_in_warm_buf) { /// FIXME
+			ut_ad(flush_type == BUF_FLUSH_SINGLE_PAGE);
+			fil_flush(bpage->id.space());
+            // }
             
             /* true means we want to evict this page from the
                LRU list as well. */
@@ -1427,166 +1224,11 @@ normal:
         }
     }
 #else
-		/*kyong - write*/
-        
-        if ((unsigned)bpage->id.space() == srv_cust_space_id){ //customer
-            //increate write count
-            srv_stats.tpcc_cust_total_wr.inc();
-            //increase flush type per write
-            if(bpage->flush_type == BUF_FLUSH_LRU){
-				// ib::info()<<"[write] cust "<<bpage->id.page_no()<<" flush_type: LRU";
-            	srv_stats.tpcc_cust_lru_wr.inc();
-            }
-            else if(bpage->flush_type == BUF_FLUSH_LIST){
-				// ib::info()<<"[write] cust "<<bpage->id.page_no()<<" flush_type: CP";
-            	srv_stats.tpcc_cust_cp_wr.inc();
-            }
-            else if (bpage->flush_type == BUF_FLUSH_SINGLE_PAGE) {
-				// ib::info()<<"[write] cust "<<bpage->id.page_no()<<" flush_type: SP";
-            	srv_stats.tpcc_cust_sp_wr.inc();
-            }
-        }
-
-        else if ((unsigned)bpage->id.space() == srv_dist_space_id){ //district
-            //increate write count
-            srv_stats.tpcc_dist_total_wr.inc();
-            //increase flush type per write
-            if(bpage->flush_type == BUF_FLUSH_LRU){
-				// ib::info()<<"[write] dist "<<bpage->id.page_no()<<" flush_type: LRU";
-            srv_stats.tpcc_dist_lru_wr.inc();
-            }
-            else if(bpage->flush_type == BUF_FLUSH_LIST){
-				srv_stats.tpcc_dist_cp_wr.inc();
-				// ib::info()<<"[write] dist "<<bpage->id.page_no()<<" flush_type: CP";
-            }
-            else if (bpage->flush_type == BUF_FLUSH_SINGLE_PAGE) {
-				// ib::info()<<"[write] dist "<<bpage->id.page_no()<<" flush_type: SP";
-            	srv_stats.tpcc_dist_sp_wr.inc();
-            }
-        }
-
-        else if ((unsigned)bpage->id.space() == srv_his_space_id){ //history
-            //increate write count
-            srv_stats.tpcc_his_total_wr.inc();
-            //increase flush type per write
-            if(bpage->flush_type == BUF_FLUSH_LRU){
-				// ib::info()<<"[write] his "<<bpage->id.page_no()<<" flush_type: LRU";
-            	srv_stats.tpcc_his_lru_wr.inc();
-            }
-            else if(bpage->flush_type == BUF_FLUSH_LIST){
-				// ib::info()<<"[write] his "<<bpage->id.page_no()<<" flush_type: CP";
-            	srv_stats.tpcc_his_cp_wr.inc();
-            }
-            else if (bpage->flush_type == BUF_FLUSH_SINGLE_PAGE) {
-				// ib::info()<<"[write] his "<<bpage->id.page_no()<<" flush_type: SP";
-            	srv_stats.tpcc_his_sp_wr.inc();
-            }
-        }
-
-        else if ((unsigned)bpage->id.space() == srv_itm_space_id){ //item
-            //increate write count
-            srv_stats.tpcc_itm_total_wr.inc();
-            //increase flush type per write
-            if(bpage->flush_type == BUF_FLUSH_LRU){
-            	srv_stats.tpcc_itm_lru_wr.inc();
-            }
-            else if(bpage->flush_type == BUF_FLUSH_LIST){
-            srv_stats.tpcc_itm_cp_wr.inc();
-            }
-            else if (bpage->flush_type == BUF_FLUSH_SINGLE_PAGE) {
-            srv_stats.tpcc_itm_sp_wr.inc();
-            }
-        }
-
-        else if ((unsigned)bpage->id.space() == srv_no_space_id){ //new orders
-            //increate write count
-            srv_stats.tpcc_no_total_wr.inc();
-            //increase flush type per write
-            if(bpage->flush_type == BUF_FLUSH_LRU){
-				// ib::info()<<"[write] no "<<bpage->id.page_no()<<" flush_type: LRU";
-            srv_stats.tpcc_no_lru_wr.inc();
-            }
-            else if(bpage->flush_type == BUF_FLUSH_LIST){
-				// ib::info()<<"[write] no "<<bpage->id.page_no()<<" flush_type: CP";
-            srv_stats.tpcc_no_cp_wr.inc();
-            }
-            else if (bpage->flush_type == BUF_FLUSH_SINGLE_PAGE) {
-				// ib::info()<<"[write] no "<<bpage->id.page_no()<<" flush_type: SP";
-            srv_stats.tpcc_no_sp_wr.inc();
-            }
-        }
-
-        else if ((unsigned)bpage->id.space() == srv_ol_space_id){ //order_line
-            //increate write count
-            srv_stats.tpcc_ol_total_wr.inc();
-            //increase flush type per write
-            if(bpage->flush_type == BUF_FLUSH_LRU){
-				// ib::info()<<"[write] ol "<<bpage->id.page_no()<<" flush_type: LRU";
-            srv_stats.tpcc_ol_lru_wr.inc();
-            }
-            else if(bpage->flush_type == BUF_FLUSH_LIST){
-				// ib::info()<<"[write] ol "<<bpage->id.page_no()<<" flush_type: CP";
-            srv_stats.tpcc_ol_cp_wr.inc();
-            }
-            else if (bpage->flush_type == BUF_FLUSH_SINGLE_PAGE) {
-				// ib::info()<<"[write] ol "<<bpage->id.page_no()<<" flush_type: SP";
-            srv_stats.tpcc_ol_sp_wr.inc();
-            }
-        }
-
-        else if ((unsigned)bpage->id.space() == srv_or_space_id){ //orders
-            //increate write count
-            srv_stats.tpcc_or_total_wr.inc();
-            //increase flush type per write
-            if(bpage->flush_type == BUF_FLUSH_LRU){
-				// ib::info()<<"[write] or "<<bpage->id.page_no()<<" flush_type: LRU";
-            srv_stats.tpcc_or_lru_wr.inc();
-            }
-            else if(bpage->flush_type == BUF_FLUSH_LIST){
-				// ib::info()<<"[write] or "<<bpage->id.page_no()<<" flush_type: CP";
-            srv_stats.tpcc_or_cp_wr.inc();
-            }
-            else if (bpage->flush_type == BUF_FLUSH_SINGLE_PAGE) {
-				// ib::info()<<"[write] or "<<bpage->id.page_no()<<" flush_type: SP";
-            srv_stats.tpcc_or_sp_wr.inc();
-            }
-        }
-
-        else if ((unsigned)bpage->id.space() == srv_stk_space_id){ //stock
-            //increate write count
-            srv_stats.tpcc_stk_total_wr.inc();
-            //increase flush type per write
-            if(bpage->flush_type == BUF_FLUSH_LRU){
-				// ib::info()<<"[write] stk "<<bpage->id.page_no()<<" flush_type: LRU";
-            srv_stats.tpcc_stk_lru_wr.inc();
-            }
-            else if(bpage->flush_type == BUF_FLUSH_LIST){
-				// ib::info()<<"[write] stk "<<bpage->id.page_no()<<" flush_type: CP";
-            srv_stats.tpcc_stk_cp_wr.inc();
-            }
-            else if (bpage->flush_type == BUF_FLUSH_SINGLE_PAGE) {
-				// ib::info()<<"[write] stk "<<bpage->id.page_no()<<" flush_type: SP";
-            srv_stats.tpcc_stk_sp_wr.inc();
-            }
-        }
-
-        else if ((unsigned)bpage->id.space() == srv_wh_space_id){ //warehouse
-            //increate write count
-            srv_stats.tpcc_wh_total_wr.inc();
-            //increase flush type per write
-            if(bpage->flush_type == BUF_FLUSH_LRU){
-				// ib::info()<<"[write] wh "<<bpage->id.page_no()<<" flush_type: LRU";
-            srv_stats.tpcc_wh_lru_wr.inc();
-            }
-            else if(bpage->flush_type == BUF_FLUSH_LIST){
-				// ib::info()<<"[write] wh "<<bpage->id.page_no()<<" flush_type: CP";
-            srv_stats.tpcc_wh_cp_wr.inc();
-            }
-            else if (bpage->flush_type == BUF_FLUSH_SINGLE_PAGE) {
-				// ib::info()<<"[write] wh "<<bpage->id.page_no()<<" flush_type: SP";
-            srv_stats.tpcc_wh_sp_wr.inc();
-            }
-        }
+	#ifdef UNIV_TPCC_MONITOR
+		if(is_tpcc_table(bpage)){
+			tpcc_add_write_type(bpage, flush_type, bpage->buf_pool_index); 
+		}
+	#endif /*UNIV_TPCC_MONITOR*/
 
     if (!srv_use_doublewrite_buf
 	    || buf_dblwr == NULL
@@ -1607,7 +1249,7 @@ normal:
 	} else if (flush_type == BUF_FLUSH_SINGLE_PAGE) {
 		buf_dblwr_write_single_page(bpage, sync);
 	} else {
-		ut_ad(!sync);
+		ut_ad(!sync); //현재 > FKPT?
 		buf_dblwr_add_to_batch(bpage);
 	}
 
@@ -1688,7 +1330,7 @@ buf_flush_page(
 		}
 	}
 
-	if (flush) {
+	if (flush) { 
 
 		/* We are committed to flushing by the time we get here */
 
@@ -1703,20 +1345,20 @@ buf_flush_page(
 		++buf_pool->n_flush[flush_type];
 
 
-#ifdef UNIV_WARM_BUF_CACHE
-        if(flush_type != BUF_FLUSH_LIST){ //cp 제외
-                if (bpage->buf_fix_count == 0 && !bpage->cached_in_warm_buf) { 
-                lsn_t before_lsn = mach_read_from_8(reinterpret_cast<const buf_block_t *>(bpage)->frame + FIL_PAGE_LSN);
-                lsn_t lsn_gap = bpage->oldest_modification - before_lsn;
+#ifdef UNIV_WARM_BUF_CACHE  
+	if (flush_type != BUF_FLUSH_LIST //not cp
+		&& bpage->buf_fix_count == 0 
+		&& !bpage->cached_in_warm_buf
+		&& bpage->oldest_modification != 0 //?추가하는게 맞을까?
+		) { 
+		// lsn_t before_lsn = mach_read_from_8(reinterpret_cast<const buf_block_t *>(bpage)->frame + FIL_PAGE_LSN);
+		// lsn_t lsn_gap = bpage->oldest_modification - before_lsn;
 
-                /* FIXME: Ad-hoc method */
-                if (0 < lsn_gap  & lsn_gap < 20000000000) {
-					//60000000000
-                //if (0 < lsn_gap && lsn_gap < 500000000) {
-                    bpage->moved_to_warm_buf = true;
-                }
-            }
-        }
+		// if (0 < lsn_gap  & lsn_gap < 60000000000) 
+		// if (0 < lsn_gap && lsn_gap < 500000000) 
+
+		bpage->moved_to_warm_buf = true;
+	}
 #endif /* UNIV_WARM_BUF_CACHE */
 
 		mutex_exit(block_mutex);
@@ -1932,7 +1574,7 @@ buf_flush_try_neighbors(
 	for (ulint i = low; i < high; i++) {
 		buf_page_t*	bpage;
 
-		if ((count + n_flushed) >= n_to_flush) {
+		if ((count + n_flushed) >= n_to_flush) { /////
 
 			/* We have already flushed enough pages and
 			should call it a day. There is, however, one
@@ -2273,11 +1915,14 @@ warm_buf_flush_LRU_list_batch(
 		BPageMutex*	block_mutex = buf_page_get_mutex(bpage);
 
 		mutex_enter(block_mutex);
+		// ib::info()<<"mutex warm_buf_flush_LRU_list_batch enter";
+		
 
 		if (buf_flush_ready_for_replace(bpage)) {
 			/* block is ready for eviction i.e., it is
 			clean and is not IO-fixed or buffer fixed. */
 			mutex_exit(block_mutex);
+
 			if (buf_LRU_free_page(bpage, true)) {
 				++evict_count;
 			}
@@ -2297,6 +1942,7 @@ warm_buf_flush_LRU_list_batch(
 
 		ut_ad(!mutex_own(block_mutex));
 		ut_ad(buf_pool_mutex_own(buf_pool));
+		// ib::info()<<"mutex warm_buf_flush_LRU_list_batch exit";
 
 		free_len = UT_LIST_GET_LEN(buf_pool->free);
 		lru_len = UT_LIST_GET_LEN(buf_pool->LRU);
@@ -2532,8 +2178,10 @@ buf_flush_batch(
 	switch (flush_type) {
 	case BUF_FLUSH_LRU:
 		if (buf_pool_index(buf_pool) < srv_buf_pool_instances){
+			// ib::info()<<"mutex enter, normal bu /f_do_LRU_batch start";
 			count = buf_do_LRU_batch(buf_pool, min_n);
 			// ib::info()<<"[ky] <<normal>> LRU count: "<<count<<" min_n: "<<min_n;
+			// ib::info()<<"mutex exit, normal buf_do_LRU_batch end";
 		}
 #ifdef UNIV_WARM_BUF_CACHE
 		else{
@@ -2559,6 +2207,7 @@ buf_flush_batch(
 	}
 
 	buf_pool_mutex_exit(buf_pool);
+	// ib::info()<<"mutex exit 7";
 
 	DBUG_PRINT("ib_buf", ("flush %u completed, %u pages",
 			      unsigned(flush_type), unsigned(count)));
@@ -2614,6 +2263,7 @@ buf_flush_start(
 	os_event_reset(buf_pool->no_flush[flush_type]);
 
 	buf_pool_mutex_exit(buf_pool);
+
 
 	return(TRUE);
 }
@@ -3323,10 +2973,11 @@ page_cleaner_flush_pages_recommendation(
 		std::min<ulint>(sum_pages_for_lsn, srv_max_io_capacity * 2);
 
 	n_pages = (PCT_IO(pct_total) + avg_page_rate + pages_for_lsn) / 3;
-
 	
 #ifdef UNIV_WARM_BUF_CACHE
-	if (n_pages > (srv_max_io_capacity * (2.0/3.0))){ //FIXME : normal buf / total buf
+	// ulint warm_oldest_lsn = warm_buf_pool_get_oldest_modification();
+	// if (0< (warm_oldest_lsn - oldest_lsn) &&(warm_oldest_lsn - oldest_lsn) < 700000000 && n_pages > (srv_max_io_capacity * (2.0/3.0))){ //FIXME : normal buf / total buf
+	if ( n_pages > (srv_max_io_capacity * (2.0/3.0))){ //FIXME : normal buf / total buf
 		n_pages = (srv_max_io_capacity * (2.0/3.0));
 	}
 #else
@@ -3334,7 +2985,6 @@ page_cleaner_flush_pages_recommendation(
 		n_pages = srv_max_io_capacity;
 	}
 #endif /*UNIV_WARM_BUF_CACHE*/
-
 
 
 	/* Normalize request for each instance */
@@ -3950,7 +3600,7 @@ DECLARE_THREAD(buf_flush_page_cleaner_coordinator)(
 
 		if (ret_sleep != OS_SYNC_TIME_EXCEEDED
 		    && srv_flush_sync
-		    && buf_flush_sync_lsn > 0) {
+		    && buf_flush_sync_lsn > 0) { //ky: 이 condition이 뭔지 이해하기
 			/* woke up for flush_sync */
 			mutex_enter(&page_cleaner->mutex);
 			lsn_t	lsn_limit = buf_flush_sync_lsn;
@@ -3974,7 +3624,6 @@ DECLARE_THREAD(buf_flush_page_cleaner_coordinator)(
 			ulint	n_flushed_lru = 0;
 			ulint	n_flushed_list = 0;
 			pc_wait_finished(&n_flushed_lru, &n_flushed_list);
-			// ib::info()<<"[ky] <<normal 1>> n_flushed_lru: "<<n_flushed_lru<<" n_flushed_list: "<<n_flushed_list;
 
 			if (n_flushed_list > 0 || n_flushed_lru > 0) {
 				buf_flush_stats(n_flushed_list, n_flushed_lru);
@@ -4001,7 +3650,6 @@ DECLARE_THREAD(buf_flush_page_cleaner_coordinator)(
 			} else {
 				n_to_flush = 0;
 			}
-			// ib::info()<<"[ky] <<normal>> n_to_flush: "<<n_to_flush;
 
 			/* Request flushing for threads */
 			pc_request(n_to_flush, lsn_limit);
@@ -4037,7 +3685,6 @@ DECLARE_THREAD(buf_flush_page_cleaner_coordinator)(
 			n_flushed_last += n_flushed_list;
 
 			n_flushed = n_flushed_lru + n_flushed_list;
-			// ib::info()<<"[ky] <<normal 2>> n_flushed_lru: "<<n_flushed_lru<<" n_flushed_list: "<<n_flushed_list;
 
 			if (n_flushed_lru) {
 				MONITOR_INC_VALUE_CUMULATIVE(
@@ -4650,7 +4297,6 @@ warm_buf_pc_flush_slot(void)
 		}
 
 		mutex_exit(&warm_buf_page_cleaner->mutex);
-
 		lru_tm = ut_time_monotonic_ms();
 
 		/* Flush pages from end of LRU if required */
@@ -4977,30 +4623,6 @@ than a second
 @param next_loop_time	time when next loop iteration should start
 @param sig_count	zero or the value returned by previous call of
 			os_event_reset() */
-// static
-// ulint
-// warm_buf_pc_sleep_if_needed(
-// /*===============*/
-// 	ulint		next_loop_time,
-// 	int64_t		sig_count,
-//     os_event_t  event)
-// {
-// 	ulint	cur_time = ut_time_monotonic_ms();
-
-// 	if (next_loop_time > cur_time) {
-// 		/* Get sleep interval in micro seconds. We use
-// 		ut_min() to avoid long sleep in case of wrap around. */
-// 		ulint	sleep_us;
-
-// 		sleep_us = ut_min(static_cast<ulint>(1000000),
-// 				  (next_loop_time - cur_time) * 1000);
-
-// 		return(os_event_wait_time_low(event,
-// 					      sleep_us, sig_count));
-// 	}
-
-// 	return(OS_SYNC_TIME_EXCEEDED);
-// }
 
 static
 ulint
@@ -5123,48 +4745,25 @@ warm_buf_page_cleaner_flush_pages_recommendation(
 		mutex_exit(&warm_buf_page_cleaner->mutex);
 
 		/* minimum values are 1, to avoid dividing by zero. */
-		if (lru_tm < 1) {
-			lru_tm = 1;
-		}
-		if (list_tm < 1) {
-			list_tm = 1;
-		}
-		if (flush_tm < 1) {
-			flush_tm = 1;
-		}
+		// if (lru_tm < 1) {
+		// 	lru_tm = 1;
+		// }
+		// if (list_tm < 1) {
+		// 	list_tm = 1;
+		// }
+		// if (flush_tm < 1) {
+		// 	flush_tm = 1;
+		// }
 
-		if (lru_pass < 1) {
-			lru_pass = 1;
-		}
-		if (list_pass < 1) {
-			list_pass = 1;
-		}
-		if (flush_pass < 1) {
-			flush_pass = 1;
-		}
-
-		// MONITOR_SET(MONITOR_FLUSH_ADAPTIVE_AVG_TIME_SLOT,
-		// 	    list_tm / list_pass);
-		// MONITOR_SET(MONITOR_LRU_BATCH_FLUSH_AVG_TIME_SLOT,
-		// 	    lru_tm  / lru_pass);
-
-		// MONITOR_SET(MONITOR_FLUSH_ADAPTIVE_AVG_TIME_THREAD,
-		// 	    list_tm / (srv_n_page_cleaners * flush_pass));
-		// MONITOR_SET(MONITOR_LRU_BATCH_FLUSH_AVG_TIME_THREAD,
-		// 	    lru_tm / (srv_n_page_cleaners * flush_pass));
-		// MONITOR_SET(MONITOR_FLUSH_ADAPTIVE_AVG_TIME_EST,
-		// 	    flush_tm * list_tm / flush_pass
-		// 	    / (list_tm + lru_tm));
-		// MONITOR_SET(MONITOR_LRU_BATCH_FLUSH_AVG_TIME_EST,
-		// 	    flush_tm * lru_tm / flush_pass
-		// 	    / (list_tm + lru_tm));
-		// MONITOR_SET(MONITOR_FLUSH_AVG_TIME, flush_tm / flush_pass);
-
-		// MONITOR_SET(MONITOR_FLUSH_ADAPTIVE_AVG_PASS,
-		// 	    list_pass / warm_buf_page_cleaner->n_slots);
-		// MONITOR_SET(MONITOR_LRU_BATCH_FLUSH_AVG_PASS,
-		// 	    lru_pass / warm_buf_page_cleaner->n_slots);
-		// MONITOR_SET(MONITOR_FLUSH_AVG_PASS, flush_pass);
+		// if (lru_pass < 1) {
+		// 	lru_pass = 1;
+		// }
+		// if (list_pass < 1) {
+		// 	list_pass = 1;
+		// }
+		// if (flush_pass < 1) {
+		// 	flush_pass = 1;
+		// }
 
 		prev_lsn = cur_lsn;
 		prev_time = curr_time;
@@ -5174,13 +4773,14 @@ warm_buf_page_cleaner_flush_pages_recommendation(
 		sum_pages = 0;
 	}
 
-	oldest_lsn = warm_buf_pool_get_oldest_modification();
+	// oldest_lsn = warm_buf_pool_get_oldest_modification();
+	oldest_lsn = buf_pool_get_oldest_modification();
 
 	ut_ad(oldest_lsn <= log_get_lsn());
 
 	age = cur_lsn > oldest_lsn ? cur_lsn - oldest_lsn : 0;
 
-	pct_for_dirty = af_get_pct_for_dirty();
+	pct_for_dirty = af_get_pct_for_dirty(); // FIXME 여기 Warm buf에 맞게 고쳐야함
 	pct_for_lsn = af_get_pct_for_lsn(age);
 
 	pct_total = ut_max(pct_for_dirty, pct_for_lsn);
@@ -5228,17 +4828,10 @@ warm_buf_page_cleaner_flush_pages_recommendation(
 	n_pages = (PCT_IO(pct_total) + avg_page_rate + pages_for_lsn) / 3;
 
 	
-#ifdef UNIV_WARM_BUF_CACHE
-	if (n_pages > (srv_max_io_capacity * (1.0/3.0))){ //FIXME : warm buf / total buf
-		n_pages = (srv_max_io_capacity * (1.0/3.0));
-	}
-#else
 	if (n_pages > srv_max_io_capacity) {
-		n_pages = srv_max_io_capacity;
+		// n_pages = srv_max_io_capacity;
+			n_pages = (srv_max_io_capacity * (1.0/3.0));
 	}
-#endif /*UNIV_WARM_BUF_CACHE*/
-
-
 
 	/* Normalize request for each instance */
 	mutex_enter(&warm_buf_page_cleaner->mutex);
@@ -5364,47 +4957,7 @@ DECLARE_THREAD(warm_buf_flush_page_cleaner_coordinator)(
 			n_flushed_last = n_evicted = 0;
 		}
 
-		if (ret_sleep != OS_SYNC_TIME_EXCEEDED
-		    && srv_flush_sync
-		    && buf_flush_sync_lsn > 0) {
-			/* woke up for flush_sync */
-			mutex_enter(&warm_buf_page_cleaner->mutex);
-			lsn_t	lsn_limit = buf_flush_sync_lsn;
-			buf_flush_sync_lsn = 0;
-			mutex_exit(&warm_buf_page_cleaner->mutex);
-
-			/* Request flushing for threads */
-			warm_buf_pc_request(ULINT_MAX, lsn_limit);
-
-			ib_time_monotonic_ms_t tm = ut_time_monotonic_ms();
-
-			/* Coordinator also treats requests */
-			while (warm_buf_pc_flush_slot() > 0) {}
-
-			/* only coordinator is using these counters,
-			so no need to protect by lock. */
-			warm_buf_page_cleaner->flush_time += ut_time_monotonic_ms() - tm;
-			warm_buf_page_cleaner->flush_pass++;
-
-			/* Wait for all slots to be finished */
-			ulint	n_flushed_lru = 0;
-			ulint	n_flushed_list = 0;
-			warm_buf_pc_wait_finished(&n_flushed_lru, &n_flushed_list);
-
-			if (n_flushed_list > 0 || n_flushed_lru > 0) {
-				buf_flush_stats(n_flushed_list, n_flushed_lru);
-
-			// 	MONITOR_INC_VALUE_CUMULATIVE(
-			// 		MONITOR_FLUSH_SYNC_TOTAL_PAGE,
-			// 		MONITOR_FLUSH_SYNC_COUNT,
-			// 		MONITOR_FLUSH_SYNC_PAGES,
-			// 		n_flushed_lru + n_flushed_list);
-			}
-
-			n_flushed = n_flushed_lru + n_flushed_list;
-			// ib::info()<<"[ky] <<warm 1>> n_flushed_lru: "<<n_flushed_lru<<" n_flushed_list: "<<n_flushed_list;
-
-		} else if (srv_check_activity(last_activity)) {
+		if (srv_check_activity(last_activity)) {
 			ulint	n_to_flush;
 			lsn_t	lsn_limit = 0;
 
@@ -5413,12 +4966,11 @@ DECLARE_THREAD(warm_buf_flush_page_cleaner_coordinator)(
 				last_activity = srv_get_activity_count();
 				n_to_flush =
 					warm_buf_page_cleaner_flush_pages_recommendation(
-						&lsn_limit, last_pages);
+						&lsn_limit, last_pages); //여기에서 cp flush할 페이지의 개수를 구함
 			
 			} else {
 				n_to_flush = 0;
 			}
-			// ib::info()<<"[ky] <<warm>> n_to_flush: "<<n_to_flush;
 
 			/* Request flushing for threads */
 			warm_buf_pc_request(n_to_flush, lsn_limit);
@@ -5440,7 +4992,6 @@ DECLARE_THREAD(warm_buf_flush_page_cleaner_coordinator)(
 			ulint	n_flushed_list = 0;
 
 			warm_buf_pc_wait_finished(&n_flushed_lru, &n_flushed_list);
-
 
 			if (n_flushed_list > 0 || n_flushed_lru > 0) {
 				buf_flush_stats(n_flushed_list, n_flushed_lru);

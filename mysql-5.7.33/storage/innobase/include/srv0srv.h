@@ -75,7 +75,17 @@ struct srv_stats_t {
 	typedef ib_counter_t<lint, 1, single_indexer_t> lint_ctr_1_t;
 	typedef ib_counter_t<int64_t, 1, single_indexer_t> int64_ctr_1_t;
 
-  /*kyong - read*/
+#ifdef UNIV_TPCC_MONITOR
+	/* total tpcc statistics*/
+	ulint_ctr_1_t tpcc_disk_rd;
+	ulint_ctr_1_t tpcc_buf_rd;
+	ulint_ctr_1_t tpcc_lru_wr;
+	ulint_ctr_1_t tpcc_sp_wr;
+	ulint_ctr_1_t tpcc_cp_wr;
+	ulint_ctr_1_t tpcc_fpage_list;
+	ulint_ctr_1_t tpcc_lru_scan;
+
+	/* tpcc disk read (buffer miss) */
 	ulint_ctr_1_t tpcc_wh_disk_rd;
 	ulint_ctr_1_t tpcc_dist_disk_rd;
 	ulint_ctr_1_t tpcc_cust_disk_rd;
@@ -86,6 +96,7 @@ struct srv_stats_t {
 	ulint_ctr_1_t tpcc_ol_disk_rd;
 	ulint_ctr_1_t tpcc_his_disk_rd;
 
+	/* tpcc buffer read (buffer hit) */
 	ulint_ctr_1_t tpcc_wh_buf_rd;
 	ulint_ctr_1_t tpcc_dist_buf_rd;
 	ulint_ctr_1_t tpcc_cust_buf_rd;
@@ -96,11 +107,7 @@ struct srv_stats_t {
 	ulint_ctr_1_t tpcc_ol_buf_rd;
 	ulint_ctr_1_t tpcc_his_buf_rd;
 
-	ulint_ctr_1_t tpcc_total_rd;
-	/**/
-
-	/*kyong - write*/
-	//lru write
+	//tpcc lru flush
 	ulint_ctr_1_t tpcc_cust_lru_wr;
 	ulint_ctr_1_t tpcc_dist_lru_wr;
 	ulint_ctr_1_t tpcc_his_lru_wr;
@@ -111,7 +118,7 @@ struct srv_stats_t {
 	ulint_ctr_1_t tpcc_stk_lru_wr;
 	ulint_ctr_1_t tpcc_wh_lru_wr;
 
-	//checkpoint write
+	//tpcc checkpoint flush
 	ulint_ctr_1_t tpcc_cust_cp_wr;
 	ulint_ctr_1_t tpcc_dist_cp_wr;
 	ulint_ctr_1_t tpcc_his_cp_wr;
@@ -122,7 +129,7 @@ struct srv_stats_t {
 	ulint_ctr_1_t tpcc_stk_cp_wr;
 	ulint_ctr_1_t tpcc_wh_cp_wr;
 
-	//single page write
+	//tpcc single page flush
 	ulint_ctr_1_t tpcc_cust_sp_wr;
 	ulint_ctr_1_t tpcc_dist_sp_wr;
 	ulint_ctr_1_t tpcc_his_sp_wr;
@@ -133,25 +140,72 @@ struct srv_stats_t {
 	ulint_ctr_1_t tpcc_stk_sp_wr;
 	ulint_ctr_1_t tpcc_wh_sp_wr;
 
-	//total write
-	ulint_ctr_1_t tpcc_cust_total_wr;
-	ulint_ctr_1_t tpcc_dist_total_wr;
-	ulint_ctr_1_t tpcc_his_total_wr;
-	ulint_ctr_1_t tpcc_itm_total_wr;
-	ulint_ctr_1_t tpcc_no_total_wr;
-	ulint_ctr_1_t tpcc_ol_total_wr;
-	ulint_ctr_1_t tpcc_or_total_wr;
-	ulint_ctr_1_t tpcc_stk_total_wr;
-	ulint_ctr_1_t tpcc_wh_total_wr;
+#ifdef UNIV_WARM_BUF_CACHE
+	/* total tpcc statistics*/
+	ulint_ctr_1_t tpcc_warm_disk_rd;
+	ulint_ctr_1_t tpcc_warm_buf_rd;
+	ulint_ctr_1_t tpcc_warm_lru_wr;
+	ulint_ctr_1_t tpcc_warm_sp_wr;
+	ulint_ctr_1_t tpcc_warm_cp_wr;
+	ulint_ctr_1_t tpcc_warm_fpage_list;
+	ulint_ctr_1_t tpcc_warm_lru_scan;
 
-	/* LRU/CP warm cache vs original buf **/
-	ulint_ctr_1_t warm_lru_flush;
-	ulint_ctr_1_t warm_cp_flush;
-	ulint_ctr_1_t warm_sp_flush;
-	ulint_ctr_1_t original_lru_flush;
-	ulint_ctr_1_t original_cp_flush;
-	ulint_ctr_1_t original_sp_flush;
-  /**/
+	/* tpcc disk read (buffer miss) */
+	ulint_ctr_1_t tpcc_warm_wh_disk_rd;
+	ulint_ctr_1_t tpcc_warm_dist_disk_rd;
+	ulint_ctr_1_t tpcc_warm_cust_disk_rd;
+	ulint_ctr_1_t tpcc_warm_stk_disk_rd;
+	ulint_ctr_1_t tpcc_warm_itm_disk_rd;
+	ulint_ctr_1_t tpcc_warm_or_disk_rd;
+	ulint_ctr_1_t tpcc_warm_no_disk_rd;
+	ulint_ctr_1_t tpcc_warm_ol_disk_rd;
+	ulint_ctr_1_t tpcc_warm_his_disk_rd;
+
+	/* tpcc buffer read (buffer hit) */
+	ulint_ctr_1_t tpcc_warm_wh_buf_rd;
+	ulint_ctr_1_t tpcc_warm_dist_buf_rd;
+	ulint_ctr_1_t tpcc_warm_cust_buf_rd;
+	ulint_ctr_1_t tpcc_warm_stk_buf_rd;
+	ulint_ctr_1_t tpcc_warm_itm_buf_rd;
+	ulint_ctr_1_t tpcc_warm_or_buf_rd;
+	ulint_ctr_1_t tpcc_warm_no_buf_rd;
+	ulint_ctr_1_t tpcc_warm_ol_buf_rd;
+	ulint_ctr_1_t tpcc_warm_his_buf_rd;
+
+	//tpcc lru flush
+	ulint_ctr_1_t tpcc_warm_cust_lru_wr;
+	ulint_ctr_1_t tpcc_warm_dist_lru_wr;
+	ulint_ctr_1_t tpcc_warm_his_lru_wr;
+	ulint_ctr_1_t tpcc_warm_itm_lru_wr;
+	ulint_ctr_1_t tpcc_warm_no_lru_wr;
+	ulint_ctr_1_t tpcc_warm_ol_lru_wr;
+	ulint_ctr_1_t tpcc_warm_or_lru_wr;
+	ulint_ctr_1_t tpcc_warm_stk_lru_wr;
+	ulint_ctr_1_t tpcc_warm_wh_lru_wr;
+
+	//tpcc checkpoint flush
+	ulint_ctr_1_t tpcc_warm_cust_cp_wr;
+	ulint_ctr_1_t tpcc_warm_dist_cp_wr;
+	ulint_ctr_1_t tpcc_warm_his_cp_wr;
+	ulint_ctr_1_t tpcc_warm_itm_cp_wr;
+	ulint_ctr_1_t tpcc_warm_no_cp_wr;
+	ulint_ctr_1_t tpcc_warm_ol_cp_wr;
+	ulint_ctr_1_t tpcc_warm_or_cp_wr;
+	ulint_ctr_1_t tpcc_warm_stk_cp_wr;
+	ulint_ctr_1_t tpcc_warm_wh_cp_wr;
+
+	//tpcc single page flush
+	ulint_ctr_1_t tpcc_warm_cust_sp_wr;
+	ulint_ctr_1_t tpcc_warm_dist_sp_wr;
+	ulint_ctr_1_t tpcc_warm_his_sp_wr;
+	ulint_ctr_1_t tpcc_warm_itm_sp_wr;
+	ulint_ctr_1_t tpcc_warm_no_sp_wr;
+	ulint_ctr_1_t tpcc_warm_ol_sp_wr;
+	ulint_ctr_1_t tpcc_warm_or_sp_wr;
+	ulint_ctr_1_t tpcc_warm_stk_sp_wr;
+	ulint_ctr_1_t tpcc_warm_wh_sp_wr;
+#endif /*UNIV_WARM_BUF_CACHE*/
+#endif /*UNIV_TPCC_MONITOR*/
 
 	/** Count the amount of data written in total (in bytes) */
 	ulint_ctr_1_t		data_written;
@@ -558,7 +612,7 @@ extern unsigned long long	srv_stats_persistent_sample_pages;
 extern my_bool			srv_stats_auto_recalc;
 extern my_bool			srv_stats_include_delete_marked;
 
-/*kyong - tablespace*/
+#ifdef UNIV_TPCC_MONITOR
 extern ulint    srv_ol_space_id;
 extern ulint    srv_no_space_id;
 extern ulint    srv_stk_space_id;
@@ -568,7 +622,7 @@ extern ulint    srv_dist_space_id;
 extern ulint    srv_wh_space_id;
 extern ulint    srv_itm_space_id;
 extern ulint    srv_his_space_id;
-/**/
+#endif /*UNIV_TPCC_MONITOR*/
 
 extern ibool	srv_use_doublewrite_buf;
 extern ulong	srv_doublewrite_batch_size;
@@ -1078,83 +1132,6 @@ struct export_var_t{
 	ulint innodb_buffer_pool_pages_latched;	/*!< Latched pages */
 #endif /* UNIV_DEBUG */
 
-  /*kyong -read*/
-	ulint tpcc_wh_disk_rd;
-	ulint tpcc_dist_disk_rd;
-	ulint tpcc_cust_disk_rd;
-	ulint tpcc_stk_disk_rd;
-	ulint tpcc_itm_disk_rd;
-	ulint tpcc_or_disk_rd;
-	ulint tpcc_no_disk_rd;
-	ulint tpcc_ol_disk_rd;
-	ulint tpcc_his_disk_rd;
-
-	ulint tpcc_wh_buf_rd;
-	ulint tpcc_dist_buf_rd;
-	ulint tpcc_cust_buf_rd;
-	ulint tpcc_stk_buf_rd;
-	ulint tpcc_itm_buf_rd;
-	ulint tpcc_or_buf_rd;
-	ulint tpcc_no_buf_rd;
-	ulint tpcc_ol_buf_rd;
-	ulint tpcc_his_buf_rd;
-
-	ulint tpcc_total_rd;
-	/**/
-
-	/*kyong - write*/
-	//lru write
-	ulint tpcc_cust_lru_wr;
-	ulint tpcc_dist_lru_wr;
-	ulint tpcc_his_lru_wr;
-	ulint tpcc_itm_lru_wr;
-	ulint tpcc_no_lru_wr;
-	ulint tpcc_ol_lru_wr;
-	ulint tpcc_or_lru_wr;
-	ulint tpcc_stk_lru_wr;
-	ulint tpcc_wh_lru_wr;
-
-	//checkpoint write
-	ulint tpcc_cust_cp_wr;
-	ulint tpcc_dist_cp_wr;
-	ulint tpcc_his_cp_wr;
-	ulint tpcc_itm_cp_wr;
-	ulint tpcc_no_cp_wr;
-	ulint tpcc_ol_cp_wr;
-	ulint tpcc_or_cp_wr;
-	ulint tpcc_stk_cp_wr;
-	ulint tpcc_wh_cp_wr;
-
-	//single page write
-	ulint tpcc_cust_sp_wr;
-	ulint tpcc_dist_sp_wr;
-	ulint tpcc_his_sp_wr;
-	ulint tpcc_itm_sp_wr;
-	ulint tpcc_no_sp_wr;
-	ulint tpcc_ol_sp_wr;
-	ulint tpcc_or_sp_wr;
-	ulint tpcc_stk_sp_wr;
-	ulint tpcc_wh_sp_wr;
-
-	//total write
-	ulint tpcc_cust_total_wr;
-	ulint tpcc_dist_total_wr;
-	ulint tpcc_his_total_wr;
-	ulint tpcc_itm_total_wr;
-	ulint tpcc_no_total_wr;
-	ulint tpcc_ol_total_wr;
-	ulint tpcc_or_total_wr;
-	ulint tpcc_stk_total_wr;
-	ulint tpcc_wh_total_wr;
-
-	//lru /cp warm vs original
-	ulint warm_lru_flush;
-	ulint warm_cp_flush;
-	ulint warm_sp_flush;
-	ulint original_lru_flush;
-	ulint original_cp_flush;
-	ulint original_sp_flush;
-  /**/
 	ulint innodb_buffer_pool_read_requests;	/*!< buf_pool->stat.n_page_gets */
 	ulint innodb_buffer_pool_reads;		/*!< srv_buf_pool_reads */
 	ulint innodb_buffer_pool_wait_free;	/*!< srv_buf_pool_wait_free */
@@ -1165,51 +1142,6 @@ struct export_var_t{
 	ulint innodb_buffer_pool_read_ahead_evicted;/*!< srv_read_ahead evicted*/
 	ulint innodb_dblwr_pages_written;	/*!< srv_dblwr_pages_written */
 	ulint innodb_dblwr_writes;		/*!< srv_dblwr_writes */
-#ifdef UNIV_WARM_BUF_CACHE
-    ulint innodb_warm_buf_pages_stored_stk;       /*!< srv_warm_buf_pages_stored_stk */
-    ulint innodb_warm_buf_pages_stored_ol;       /*!< srv_warm_buf_pages_stored_ol */
-    ulint innodb_warm_buf_pages_stored_cust;       /*!< srv_warm_buf_pages_stored_cust */
-    ulint innodb_warm_buf_pages_read_stk;         /*!< srv_warm_buf_pages_read_stk */
-    ulint innodb_warm_buf_pages_read_ol;         /*!< srv_warm_buf_pages_read_ol */
-    ulint innodb_warm_buf_pages_read_cust;         /*!< srv_warm_buf_pages_read_cust */
-    ulint innodb_warm_buf_pages_written_stk;      /*!< srv_warm_buf_pages_written_stk */
-    ulint innodb_warm_buf_pages_written_ol;      /*!< srv_warm_buf_pages_written_ol */
-    ulint innodb_warm_buf_pages_written_cust;     /*!< srv_warm_buf_pages_written_cust */
-	ulint innodb_move_to_warm_buf_cnt_stk;        /*!< srv_move_to_warm_buf_cnt_stk */
-	ulint innodb_move_to_warm_buf_cnt_ol;         /*!< srv_move_to_warm_buf_cnt_ol */
-	ulint innodb_move_to_warm_buf_cnt_cust;       /*!< srv_move_to_warm_buf_cnt_cust */
-	ulint innodb_stay_in_buf_cnt_stk;             /*!< srv_stay_in_buf_cnt_stk */
-	ulint innodb_stay_in_buf_cnt_ol;                 /*!< srv_stay_in_buf_cnt_ol */
-	ulint innodb_stay_in_buf_cnt_cust;               /*!< srv_stay_in_buf_cnt_cust */
-	ulint innodb_warm_buf_pages_written_cp;
-	ulint innodb_warm_buf_pages_written_lru;
-
-	/***/
-	//normal buffer lru flush
-	ulint tpcc_cust_normal_lru;
-	ulint tpcc_stk_normal_lru;
-
-	//normal buffer cp flush
-	ulint tpcc_cust_normal_cp;
-	ulint tpcc_stk_normal_cp;
-
-	//normal buffer sp flush
-	ulint tpcc_cust_normal_sp;
-	ulint tpcc_stk_normal_sp;
-
-	//warm buffer lru flush
-	ulint tpcc_cust_warm_lru;
-	ulint tpcc_stk_warm_lru;
-
-	//warm buffer cp flush
-	ulint tpcc_cust_warm_cp;
-	ulint tpcc_stk_warm_cp;
-
-	//warm buffer sp flush
-	ulint tpcc_cust_warm_sp;
-	ulint tpcc_stk_warm_sp;
-
-#endif /* UNIV_WARM_BUF_CACHE */
 	ulint innodb_log_waits;			/*!< srv_log_waits */
 	ulint innodb_log_write_requests;	/*!< srv_log_write_requests */
 	ulint innodb_log_writes;		/*!< srv_log_writes */
@@ -1245,6 +1177,138 @@ struct export_var_t{
 						index lookups when freeing
 						file pages */
 #endif /* UNIV_DEBUG */
+#ifdef UNIV_TPCC_MONITOR
+	/* total tpcc statistics*/
+	ulint tpcc_disk_rd;
+	ulint tpcc_buf_rd;
+	ulint tpcc_lru_wr;
+	ulint tpcc_sp_wr;
+	ulint tpcc_cp_wr;
+	ulint tpcc_fpage_list;
+	ulint tpcc_lru_scan;
+	
+	/* tpcc disk read (buffer miss) */
+	ulint tpcc_wh_disk_rd;
+	ulint tpcc_dist_disk_rd;
+	ulint tpcc_cust_disk_rd;
+	ulint tpcc_stk_disk_rd;
+	ulint tpcc_itm_disk_rd;
+	ulint tpcc_or_disk_rd;
+	ulint tpcc_no_disk_rd;
+	ulint tpcc_ol_disk_rd;
+	ulint tpcc_his_disk_rd;
+
+	/* tpcc buffer read (buffer hit) */
+	ulint tpcc_wh_buf_rd;
+	ulint tpcc_dist_buf_rd;
+	ulint tpcc_cust_buf_rd;
+	ulint tpcc_stk_buf_rd;
+	ulint tpcc_itm_buf_rd;
+	ulint tpcc_or_buf_rd;
+	ulint tpcc_no_buf_rd;
+	ulint tpcc_ol_buf_rd;
+	ulint tpcc_his_buf_rd;
+
+	//tpcc lru flush
+	ulint tpcc_cust_lru_wr;
+	ulint tpcc_dist_lru_wr;
+	ulint tpcc_his_lru_wr;
+	ulint tpcc_itm_lru_wr;
+	ulint tpcc_no_lru_wr;
+	ulint tpcc_ol_lru_wr;
+	ulint tpcc_or_lru_wr;
+	ulint tpcc_stk_lru_wr;
+	ulint tpcc_wh_lru_wr;
+
+	//tpcc checkpoint flush
+	ulint tpcc_cust_cp_wr;
+	ulint tpcc_dist_cp_wr;
+	ulint tpcc_his_cp_wr;
+	ulint tpcc_itm_cp_wr;
+	ulint tpcc_no_cp_wr;
+	ulint tpcc_ol_cp_wr;
+	ulint tpcc_or_cp_wr;
+	ulint tpcc_stk_cp_wr;
+	ulint tpcc_wh_cp_wr;
+
+	//tpcc single page flush
+	ulint tpcc_cust_sp_wr;
+	ulint tpcc_dist_sp_wr;
+	ulint tpcc_his_sp_wr;
+	ulint tpcc_itm_sp_wr;
+	ulint tpcc_no_sp_wr;
+	ulint tpcc_ol_sp_wr;
+	ulint tpcc_or_sp_wr;
+	ulint tpcc_stk_sp_wr;
+	ulint tpcc_wh_sp_wr;
+
+#ifdef UNIV_WARM_BUF_CACHE
+	/* total tpcc statistics*/
+	ulint tpcc_warm_disk_rd;
+	ulint tpcc_warm_buf_rd;
+	ulint tpcc_warm_lru_wr;
+	ulint tpcc_warm_sp_wr;
+	ulint tpcc_warm_cp_wr;
+	ulint tpcc_warm_fpage_list;
+	ulint tpcc_warm_lru_scan;
+	
+	/* tpcc disk read (buffer miss) */
+	ulint tpcc_warm_wh_disk_rd;
+	ulint tpcc_warm_dist_disk_rd;
+	ulint tpcc_warm_cust_disk_rd;
+	ulint tpcc_warm_stk_disk_rd;
+	ulint tpcc_warm_itm_disk_rd;
+	ulint tpcc_warm_or_disk_rd;
+	ulint tpcc_warm_no_disk_rd;
+	ulint tpcc_warm_ol_disk_rd;
+	ulint tpcc_warm_his_disk_rd;
+
+	/* tpcc buffer read (buffer hit) */
+	ulint tpcc_warm_wh_buf_rd;
+	ulint tpcc_warm_dist_buf_rd;
+	ulint tpcc_warm_cust_buf_rd;
+	ulint tpcc_warm_stk_buf_rd;
+	ulint tpcc_warm_itm_buf_rd;
+	ulint tpcc_warm_or_buf_rd;
+	ulint tpcc_warm_no_buf_rd;
+	ulint tpcc_warm_ol_buf_rd;
+	ulint tpcc_warm_his_buf_rd;
+
+	//tpcc lru flush
+	ulint tpcc_warm_cust_lru_wr;
+	ulint tpcc_warm_dist_lru_wr;
+	ulint tpcc_warm_his_lru_wr;
+	ulint tpcc_warm_itm_lru_wr;
+	ulint tpcc_warm_no_lru_wr;
+	ulint tpcc_warm_ol_lru_wr;
+	ulint tpcc_warm_or_lru_wr;
+	ulint tpcc_warm_stk_lru_wr;
+	ulint tpcc_warm_wh_lru_wr;
+
+	//tpcc checkpoint flush
+	ulint tpcc_warm_cust_cp_wr;
+	ulint tpcc_warm_dist_cp_wr;
+	ulint tpcc_warm_his_cp_wr;
+	ulint tpcc_warm_itm_cp_wr;
+	ulint tpcc_warm_no_cp_wr;
+	ulint tpcc_warm_ol_cp_wr;
+	ulint tpcc_warm_or_cp_wr;
+	ulint tpcc_warm_stk_cp_wr;
+	ulint tpcc_warm_wh_cp_wr;
+
+	//tpcc single page flush
+	ulint tpcc_warm_cust_sp_wr;
+	ulint tpcc_warm_dist_sp_wr;
+	ulint tpcc_warm_his_sp_wr;
+	ulint tpcc_warm_itm_sp_wr;
+	ulint tpcc_warm_no_sp_wr;
+	ulint tpcc_warm_ol_sp_wr;
+	ulint tpcc_warm_or_sp_wr;
+	ulint tpcc_warm_stk_sp_wr;
+	ulint tpcc_warm_wh_sp_wr;
+#endif /*UNIV_WARM_BUF_CACHE*/
+
+#endif /*UNIV_TPCC_MONITOR*/
 };
 
 /** Thread slot in the thread table.  */

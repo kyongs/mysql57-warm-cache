@@ -1345,59 +1345,33 @@ srv_printf_innodb_monitor(
 
 	buf_print_io(file);
 
-/*kyong - read*/
+#ifdef UNIV_TPCC_MONITOR
+
+	fprintf(file,
+		"Buffer Read Page:                 " ULINTPF "\n"
+		"Disk Read Page:                   " ULINTPF "\n"
+		"LRU Flush Page:                   " ULINTPF "\n"
+		"CP Flush Page:                    " ULINTPF "\n"
+		"SP Flush Page:                    " ULINTPF "\n"
+		"Free Page List:                   " ULINTPF "\n"
+		"LRU Scan Page:                    " ULINTPF "\n\n",
+		// "Avg.  Page :             %.2f      \n", 
+		(ulint) srv_stats.tpcc_buf_rd, (ulint) srv_stats.tpcc_disk_rd,
+		(ulint) srv_stats.tpcc_lru_wr, (ulint) srv_stats.tpcc_cp_wr, (ulint) srv_stats.tpcc_sp_wr,
+		(ulint) srv_stats.tpcc_fpage_list, (ulint) srv_stats.tpcc_lru_scan
+	);
+		// (float) (srv_stats.flushlist_page_cnt/srv_stats.flushlist_ckpt_cnt));
+	
 	fputs(
-		"-------------------------------\n"
-		"TPCC TABLE PAGE READ HIT/MISS\n"
-		"--------------------------------\n",
-		file);
-	fputs("Customer\n", file);
-	fprintf(file,
-	"Buffer Reads:    " ULINTPF "\n"
-	"Disk Reads:      " ULINTPF "\n\n",
-	(ulint)srv_stats.tpcc_cust_buf_rd, (ulint)srv_stats.tpcc_cust_disk_rd
-	);
+		"---------------------------------\n"
+		"TPC-C Table Read Type Monitoring\n"
+		"---------------------------------\n", file);
 
-	fputs("District\n", file);
+	fputs("Warehouse\n", file);
 	fprintf(file,
 	"Buffer Reads:    " ULINTPF "\n"
 	"Disk Reads:      " ULINTPF "\n\n",
-		(ulint)srv_stats.tpcc_dist_buf_rd, (ulint)srv_stats.tpcc_dist_disk_rd
-		);
-
-	fputs("History\n", file);
-	fprintf(file,
-	"Buffer Reads:    " ULINTPF "\n"
-	"Disk Reads:      " ULINTPF "\n\n",
-		(ulint)srv_stats.tpcc_his_buf_rd, (ulint)srv_stats.tpcc_his_disk_rd
-	);
-
-	fputs("Item\n", file);
-	fprintf(file,
-	"Buffer Reads:    " ULINTPF "\n"
-	"Disk Reads:      " ULINTPF "\n\n",
-		(ulint)srv_stats.tpcc_itm_buf_rd, (ulint)srv_stats.tpcc_itm_disk_rd
-	);
-
-	fputs("New Orders\n", file);
-	fprintf(file,
-	"Buffer Reads:    " ULINTPF "\n"
-	"Disk Reads:      " ULINTPF "\n\n",
-		(ulint)srv_stats.tpcc_no_buf_rd, (ulint)srv_stats.tpcc_no_disk_rd
-	);
-
-	fputs("Order Line\n", file);
-	fprintf(file,
-	"Buffer Reads:    " ULINTPF "\n"
-	"Disk Reads:      " ULINTPF "\n\n",
-		(ulint)srv_stats.tpcc_ol_buf_rd, (ulint)srv_stats.tpcc_ol_disk_rd
-	);
-
-	fputs("Orders\n", file);
-	fprintf(file,
-	"Buffer Reads:    " ULINTPF "\n"
-	"Disk Reads:      " ULINTPF "\n\n",
-		(ulint)srv_stats.tpcc_or_buf_rd, (ulint)srv_stats.tpcc_or_disk_rd
+		(ulint)srv_stats.tpcc_wh_buf_rd, (ulint)srv_stats.tpcc_wh_disk_rd
 	);
 
 	fputs("Stock\n", file);
@@ -1407,269 +1381,286 @@ srv_printf_innodb_monitor(
 		(ulint)srv_stats.tpcc_stk_buf_rd, (ulint)srv_stats.tpcc_stk_disk_rd
 	);
 
+	fputs("Item\n", file);
+	fprintf(file,
+	"Buffer Reads:    " ULINTPF "\n"
+	"Disk Reads:      " ULINTPF "\n\n",
+		(ulint)srv_stats.tpcc_itm_buf_rd, (ulint)srv_stats.tpcc_itm_disk_rd
+	);
+
+	fputs("District\n", file);
+	fprintf(file,
+	"Buffer Reads:    " ULINTPF "\n"
+	"Disk Reads:      " ULINTPF "\n\n",
+		(ulint)srv_stats.tpcc_dist_buf_rd, (ulint)srv_stats.tpcc_dist_disk_rd
+	);
+
+	fputs("Customer\n", file);
+	fprintf(file,
+	"Buffer Reads:    " ULINTPF "\n"
+	"Disk Reads:      " ULINTPF "\n\n",
+	(ulint)srv_stats.tpcc_cust_buf_rd, (ulint)srv_stats.tpcc_cust_disk_rd
+	);
+
+	fputs("Orders\n", file);
+	fprintf(file,
+	"Buffer Reads:    " ULINTPF "\n"
+	"Disk Reads:      " ULINTPF "\n\n",
+		(ulint)srv_stats.tpcc_or_buf_rd, (ulint)srv_stats.tpcc_or_disk_rd
+	);
+
+	fputs("New Orders\n", file);
+	fprintf(file,
+	"Buffer Reads:    " ULINTPF "\n"
+	"Disk Reads:      " ULINTPF "\n\n",
+		(ulint)srv_stats.tpcc_no_buf_rd, (ulint)srv_stats.tpcc_no_disk_rd
+	);
+
+	fputs("History\n", file);
+	fprintf(file,
+	"Buffer Reads:    " ULINTPF "\n"
+	"Disk Reads:      " ULINTPF "\n\n",
+		(ulint)srv_stats.tpcc_his_buf_rd, (ulint)srv_stats.tpcc_his_disk_rd
+	);
+
+	fputs("Order Line\n", file);
+	fprintf(file,
+	"Buffer Reads:    " ULINTPF "\n"
+	"Disk Reads:      " ULINTPF "\n\n",
+		(ulint)srv_stats.tpcc_ol_buf_rd, (ulint)srv_stats.tpcc_ol_disk_rd
+	);
+
+	fputs("---------------------------------\n", file);
+
+	fputs("---------------------------------\n"
+	"TPC-C Table Flush Type Monitoring\n"
+	"---------------------------------\n", file);
+
+	fputs("Warehouse\n", file);
+	fprintf(file, 
+	"LRU  Writes:             " ULINTPF "\n"
+	"CKPT Writes:             " ULINTPF "\n"
+	"SPF  Writes:             " ULINTPF "\n\n",
+	(ulint) srv_stats.tpcc_wh_lru_wr, (ulint) srv_stats.tpcc_wh_cp_wr, (ulint) srv_stats.tpcc_wh_sp_wr);
+
+	fputs("Stock\n", file);
+	fprintf(file, 
+	"LRU  Writes:             " ULINTPF "\n"
+	"CKPT Writes:             " ULINTPF "\n"
+	"SPF  Writes:             " ULINTPF "\n\n",
+	(ulint) srv_stats.tpcc_stk_lru_wr, (ulint) srv_stats.tpcc_stk_cp_wr, (ulint) srv_stats.tpcc_stk_sp_wr);
+
+	fputs("Item\n", file);
+	fprintf(file, 
+	"LRU  Writes:             " ULINTPF "\n"
+	"CKPT Writes:             " ULINTPF "\n"
+	"SPF  Writes:             " ULINTPF "\n\n",
+	(ulint) srv_stats.tpcc_itm_lru_wr, (ulint) srv_stats.tpcc_itm_cp_wr, (ulint) srv_stats.tpcc_itm_sp_wr);
+
+	fputs("District\n", file);
+	fprintf(file, 
+	"LRU  Writes:             " ULINTPF "\n"
+	"CKPT Writes:             " ULINTPF "\n"
+	"SPF  Writes:             " ULINTPF "\n\n",
+	(ulint) srv_stats.tpcc_dist_lru_wr, (ulint) srv_stats.tpcc_dist_cp_wr, (ulint) srv_stats.tpcc_dist_sp_wr);
+
+	fputs("Customer\n", file);
+	fprintf(file, 
+	"LRU  Writes:             " ULINTPF "\n"
+	"CKPT Writes:             " ULINTPF "\n"
+	"SPF  Writes:             " ULINTPF "\n\n",
+	(ulint) srv_stats.tpcc_cust_lru_wr, (ulint) srv_stats.tpcc_cust_cp_wr, (ulint) srv_stats.tpcc_cust_sp_wr);
+
+	fputs("Orders\n", file);
+	fprintf(file, 
+	"LRU  Writes:             " ULINTPF "\n"
+	"CKPT Writes:             " ULINTPF "\n"
+	"SPF  Writes:             " ULINTPF "\n\n",
+	(ulint) srv_stats.tpcc_or_lru_wr, (ulint) srv_stats.tpcc_or_cp_wr, (ulint) srv_stats.tpcc_or_sp_wr);
+
+	fputs("New Orders\n", file);
+	fprintf(file, 
+	"LRU  Writes:             " ULINTPF "\n"
+	"CKPT Writes:             " ULINTPF "\n"
+	"SPF  Writes:             " ULINTPF "\n\n",
+	(ulint) srv_stats.tpcc_no_lru_wr, (ulint) srv_stats.tpcc_no_cp_wr, (ulint) srv_stats.tpcc_no_sp_wr);
+
+	fputs("History\n", file);
+	fprintf(file, 
+	"LRU  Writes:             " ULINTPF "\n"
+	"CKPT Writes:             " ULINTPF "\n"
+	"SPF  Writes:             " ULINTPF "\n\n",
+	(ulint) srv_stats.tpcc_his_lru_wr, (ulint) srv_stats.tpcc_his_cp_wr, (ulint) srv_stats.tpcc_his_sp_wr);
+
+	fputs("ORDER_LINE\n", file);
+	fprintf(file, 
+	"LRU  Writes:             " ULINTPF "\n"
+	"CKPT Writes:             " ULINTPF "\n"
+	"SPF  Writes:             " ULINTPF "\n\n",
+	(ulint) srv_stats.tpcc_ol_lru_wr, (ulint) srv_stats.tpcc_ol_cp_wr, (ulint) srv_stats.tpcc_ol_sp_wr);
+
+	
+#ifdef UNIV_WARM_BUF_CACHE
+
+	fputs("---------------------------------\n"
+	"[WARM CACHE] TPC-C Table Flush Type Monitoring\n"
+	"---------------------------------\n", file);
+
+	fprintf(file,
+		"Warm Cache Buffer Read Page:                 " ULINTPF "\n"
+		"Warm Cache Disk Read Page:                   " ULINTPF "\n"
+		"Warm Cache LRU Flush Page:                   " ULINTPF "\n"
+		"Warm Cache CP Flush Page:                    " ULINTPF "\n"
+		"Warm Cache SP Flush Page:                    " ULINTPF "\n"
+		"Warm Cache Free Page List:                   " ULINTPF "\n"
+		"Warm Cache LRU Scan Page:                    " ULINTPF "\n\n",
+		// "Avg.  Page :             %.2f      \n", 
+		(ulint) srv_stats.tpcc_warm_buf_rd, (ulint) srv_stats.tpcc_warm_disk_rd,
+		(ulint) srv_stats.tpcc_warm_lru_wr, (ulint) srv_stats.tpcc_warm_cp_wr, (ulint) srv_stats.tpcc_warm_sp_wr,
+		(ulint) srv_stats.tpcc_warm_fpage_list, (ulint) srv_stats.tpcc_warm_lru_scan
+	);
+
+	fputs(
+		"--------------------------------------\n"
+		"[WARM CACHE] TPC-C Table Read Type Monitoring\n"
+		"--------------------------------------\n", file);
+
 	fputs("Warehouse\n", file);
 	fprintf(file,
 	"Buffer Reads:    " ULINTPF "\n"
 	"Disk Reads:      " ULINTPF "\n\n",
-		(ulint)srv_stats.tpcc_wh_buf_rd, (ulint)srv_stats.tpcc_wh_disk_rd
+		(ulint)srv_stats.tpcc_warm_wh_buf_rd, (ulint)srv_stats.tpcc_warm_wh_disk_rd
 	);
 
+	fputs("Stock\n", file);
 	fprintf(file,
-	"Total Reads:    " ULINTPF "\n",
-		(ulint)srv_stats.tpcc_total_rd
+	"Buffer Reads:    " ULINTPF "\n"
+	"Disk Reads:      " ULINTPF "\n\n",
+		(ulint)srv_stats.tpcc_warm_stk_buf_rd, (ulint)srv_stats.tpcc_warm_stk_disk_rd
+	);
+
+	fputs("Item\n", file);
+	fprintf(file,
+	"Buffer Reads:    " ULINTPF "\n"
+	"Disk Reads:      " ULINTPF "\n\n",
+		(ulint)srv_stats.tpcc_warm_itm_buf_rd, (ulint)srv_stats.tpcc_warm_itm_disk_rd
+	);
+
+	fputs("District\n", file);
+	fprintf(file,
+	"Buffer Reads:    " ULINTPF "\n"
+	"Disk Reads:      " ULINTPF "\n\n",
+		(ulint)srv_stats.tpcc_warm_dist_buf_rd, (ulint)srv_stats.tpcc_warm_dist_disk_rd
+	);
+
+	fputs("Customer\n", file);
+	fprintf(file,
+	"Buffer Reads:    " ULINTPF "\n"
+	"Disk Reads:      " ULINTPF "\n\n",
+	(ulint)srv_stats.tpcc_warm_cust_buf_rd, (ulint)srv_stats.tpcc_warm_cust_disk_rd
+	);
+
+	fputs("Orders\n", file);
+	fprintf(file,
+	"Buffer Reads:    " ULINTPF "\n"
+	"Disk Reads:      " ULINTPF "\n\n",
+		(ulint)srv_stats.tpcc_warm_or_buf_rd, (ulint)srv_stats.tpcc_warm_or_disk_rd
+	);
+
+	fputs("New Orders\n", file);
+	fprintf(file,
+	"Buffer Reads:    " ULINTPF "\n"
+	"Disk Reads:      " ULINTPF "\n\n",
+		(ulint)srv_stats.tpcc_warm_no_buf_rd, (ulint)srv_stats.tpcc_warm_no_disk_rd
+	);
+
+	fputs("History\n", file);
+	fprintf(file,
+	"Buffer Reads:    " ULINTPF "\n"
+	"Disk Reads:      " ULINTPF "\n\n",
+		(ulint)srv_stats.tpcc_warm_his_buf_rd, (ulint)srv_stats.tpcc_warm_his_disk_rd
+	);
+
+	fputs("Order Line\n", file);
+	fprintf(file,
+	"Buffer Reads:    " ULINTPF "\n"
+	"Disk Reads:      " ULINTPF "\n\n",
+		(ulint)srv_stats.tpcc_warm_ol_buf_rd, (ulint)srv_stats.tpcc_warm_ol_disk_rd
 	);
 
 	fputs("---------------------------------\n", file);
+
+	fputs("----------------------------------------\n"
+	"[WARM CACHE] TPC-C Table Flush Type Monitoring\n"
+	"-------------------------------------------\n", file);
+
+	fputs("Warehouse\n", file);
+	fprintf(file, 
+	"LRU  Writes:             " ULINTPF "\n"
+	"CKPT Writes:             " ULINTPF "\n"
+	"SPF  Writes:             " ULINTPF "\n\n",
+	(ulint) srv_stats.tpcc_warm_wh_lru_wr, (ulint) srv_stats.tpcc_warm_wh_cp_wr, (ulint) srv_stats.tpcc_warm_wh_sp_wr);
+
+	fputs("Stock\n", file);
+	fprintf(file, 
+	"LRU  Writes:             " ULINTPF "\n"
+	"CKPT Writes:             " ULINTPF "\n"
+	"SPF  Writes:             " ULINTPF "\n\n",
+	(ulint) srv_stats.tpcc_warm_stk_lru_wr, (ulint) srv_stats.tpcc_warm_stk_cp_wr, (ulint) srv_stats.tpcc_warm_stk_sp_wr);
+
+	fputs("Item\n", file);
+	fprintf(file, 
+	"LRU  Writes:             " ULINTPF "\n"
+	"CKPT Writes:             " ULINTPF "\n"
+	"SPF  Writes:             " ULINTPF "\n\n",
+	(ulint) srv_stats.tpcc_warm_itm_lru_wr, (ulint) srv_stats.tpcc_warm_itm_cp_wr, (ulint) srv_stats.tpcc_warm_itm_sp_wr);
+
+	fputs("District\n", file);
+	fprintf(file, 
+	"LRU  Writes:             " ULINTPF "\n"
+	"CKPT Writes:             " ULINTPF "\n"
+	"SPF  Writes:             " ULINTPF "\n\n",
+	(ulint) srv_stats.tpcc_warm_dist_lru_wr, (ulint) srv_stats.tpcc_warm_dist_cp_wr, (ulint) srv_stats.tpcc_warm_dist_sp_wr);
+
+	fputs("Customer\n", file);
+	fprintf(file, 
+	"LRU  Writes:             " ULINTPF "\n"
+	"CKPT Writes:             " ULINTPF "\n"
+	"SPF  Writes:             " ULINTPF "\n\n",
+	(ulint) srv_stats.tpcc_warm_cust_lru_wr, (ulint) srv_stats.tpcc_warm_cust_cp_wr, (ulint) srv_stats.tpcc_warm_cust_sp_wr);
+
+	fputs("Orders\n", file);
+	fprintf(file, 
+	"LRU  Writes:             " ULINTPF "\n"
+	"CKPT Writes:             " ULINTPF "\n"
+	"SPF  Writes:             " ULINTPF "\n\n",
+	(ulint) srv_stats.tpcc_warm_or_lru_wr, (ulint) srv_stats.tpcc_warm_or_cp_wr, (ulint) srv_stats.tpcc_warm_or_sp_wr);
+
+	fputs("New Orders\n", file);
+	fprintf(file, 
+	"LRU  Writes:             " ULINTPF "\n"
+	"CKPT Writes:             " ULINTPF "\n"
+	"SPF  Writes:             " ULINTPF "\n\n",
+	(ulint) srv_stats.tpcc_warm_no_lru_wr, (ulint) srv_stats.tpcc_warm_no_cp_wr, (ulint) srv_stats.tpcc_warm_no_sp_wr);
+
+	fputs("History\n", file);
+	fprintf(file, 
+	"LRU  Writes:             " ULINTPF "\n"
+	"CKPT Writes:             " ULINTPF "\n"
+	"SPF  Writes:             " ULINTPF "\n\n",
+	(ulint) srv_stats.tpcc_warm_his_lru_wr, (ulint) srv_stats.tpcc_warm_his_cp_wr, (ulint) srv_stats.tpcc_warm_his_sp_wr);
+
+	fputs("ORDER_LINE\n", file);
+	fprintf(file, 
+	"LRU  Writes:             " ULINTPF "\n"
+	"CKPT Writes:             " ULINTPF "\n"
+	"SPF  Writes:             " ULINTPF "\n\n",
+	(ulint) srv_stats.tpcc_warm_ol_lru_wr, (ulint) srv_stats.tpcc_warm_ol_cp_wr, (ulint) srv_stats.tpcc_warm_ol_sp_wr);
+
+#endif /*UNIV_WARM_BUF_CACHE*/
+
 	// buf_print_io(file);
-
-#ifdef UNIV_WARM_BUF_CACHE
-	/*kyong - write*/
-	fputs(
-		"-------------------------------\n"
-		"TPCC TABLE WRITE \n"
-		"--------------------------------\n",
-		file);
-	fputs("Customer\n", file);
-	fprintf(file,
-	"LRU Writes:             " ULINTPF "( normal: " ULINTPF " warm: " ULINTPF ") \n"
-	"Checkpoint Writes:      " ULINTPF "( normal: " ULINTPF " warm: " ULINTPF ") \n"
-	"Single Page Writes:     " ULINTPF "( normal: " ULINTPF " warm: " ULINTPF ") \n"
-	"Total Writes:           " ULINTPF "\n\n",
-	(ulint)srv_stats.tpcc_cust_lru_wr, (ulint)srv_stats.tpcc_cust_normal_lru, (ulint)srv_stats.tpcc_cust_warm_lru,
-	(ulint)srv_stats.tpcc_cust_cp_wr, (ulint)srv_stats.tpcc_cust_normal_cp, (ulint)srv_stats.tpcc_cust_warm_cp,
-	(ulint)srv_stats.tpcc_cust_sp_wr, (ulint)srv_stats.tpcc_cust_normal_sp, (ulint)srv_stats.tpcc_cust_warm_sp,
-	(ulint)srv_stats.tpcc_cust_total_wr
-	);
-
-	fputs("District\n", file);
-	fprintf(file,
-	"LRU Writes:             " ULINTPF "\n"
-	"Checkpoint Writes:      " ULINTPF "\n"
-	"Single Page Writes:     " ULINTPF "\n"
-	"Total Writes:           " ULINTPF "\n\n",
-	(ulint)srv_stats.tpcc_dist_lru_wr, 
-	 (ulint)srv_stats.tpcc_dist_cp_wr, 
-	(ulint)srv_stats.tpcc_dist_sp_wr,
-	(ulint)srv_stats.tpcc_dist_total_wr
-	);
-
-	fputs("History\n", file);
-	fprintf(file,
-	"LRU Writes:             " ULINTPF "\n"
-	"Checkpoint Writes:      " ULINTPF "\n"
-	"Single Page Writes:     " ULINTPF "\n"
-	"Total Writes:           " ULINTPF "\n\n",
-	(ulint)srv_stats.tpcc_his_lru_wr,
-	(ulint)srv_stats.tpcc_his_cp_wr, 
-	(ulint)srv_stats.tpcc_his_sp_wr,
-	(ulint)srv_stats.tpcc_his_total_wr
-	);
-	fputs("Item\n", file);
-	fprintf(file,
-	"LRU Writes:             " ULINTPF "\n"
-	"Checkpoint Writes:      " ULINTPF "\n"
-	"Single Page Writes:     " ULINTPF "\n"
-	"Total Writes:           " ULINTPF "\n\n",
-	(ulint)srv_stats.tpcc_itm_lru_wr, (ulint)srv_stats.tpcc_itm_cp_wr,
-	(ulint)srv_stats.tpcc_itm_sp_wr, (ulint)srv_stats.tpcc_itm_total_wr
-	);
-
-	fputs("New Orders\n", file);
-	fprintf(file,
-	"LRU Writes:             " ULINTPF "\n"
-	"Checkpoint Writes:      " ULINTPF "\n"
-	"Single Page Writes:     " ULINTPF "\n"
-	"Total Writes:           " ULINTPF "\n\n",
-	(ulint)srv_stats.tpcc_no_lru_wr, (ulint)srv_stats.tpcc_no_cp_wr,
-	(ulint)srv_stats.tpcc_no_sp_wr, (ulint)srv_stats.tpcc_no_total_wr
-	);
-
-	fputs("Order Line\n", file);
-	fprintf(file,
-	"LRU Writes:             " ULINTPF "\n"
-	"Checkpoint Writes:      " ULINTPF "\n"
-	"Single Page Writes:     " ULINTPF "\n"
-	"Total Writes:           " ULINTPF "\n\n",
-	(ulint)srv_stats.tpcc_ol_lru_wr, (ulint)srv_stats.tpcc_ol_cp_wr,
-	(ulint)srv_stats.tpcc_ol_sp_wr, (ulint)srv_stats.tpcc_ol_total_wr
-	);
-
-	fputs("Orders\n", file);
-	fprintf(file,
-	"LRU Writes:             " ULINTPF "\n"
-	"Checkpoint Writes:      " ULINTPF "\n"
-	"Single Page Writes:     " ULINTPF "\n"
-	"Total Writes:           " ULINTPF "\n\n",
-	(ulint)srv_stats.tpcc_or_lru_wr, (ulint)srv_stats.tpcc_or_cp_wr,
-	(ulint)srv_stats.tpcc_or_sp_wr, (ulint)srv_stats.tpcc_or_total_wr
-	);
-
-	fputs("Stock\n", file);
-	fprintf(file,
-	"LRU Writes:             " ULINTPF "( normal: " ULINTPF " warm: " ULINTPF ") \n"
-	"Checkpoint Writes:      " ULINTPF "( normal: " ULINTPF " warm: " ULINTPF ") \n"
-	"Single Page Writes:     " ULINTPF "( normal: " ULINTPF " warm: " ULINTPF ") \n"
-	"Total Writes:           " ULINTPF "\n\n",
-	(ulint)srv_stats.tpcc_stk_lru_wr, (ulint)srv_stats.tpcc_stk_normal_lru, (ulint)srv_stats.tpcc_stk_warm_lru,
-	(ulint)srv_stats.tpcc_stk_cp_wr, (ulint)srv_stats.tpcc_stk_normal_cp, (ulint)srv_stats.tpcc_stk_warm_cp,
-	(ulint)srv_stats.tpcc_stk_sp_wr, (ulint)srv_stats.tpcc_stk_normal_sp, (ulint)srv_stats.tpcc_stk_warm_sp,
-	(ulint)srv_stats.tpcc_stk_total_wr
-	);
-
-	fputs("Warehouse\n", file);
-	fprintf(file,
-	"LRU Writes:             " ULINTPF "\n"
-	"Checkpoint Writes:      " ULINTPF "\n"
-	"Single Page Writes:     " ULINTPF "\n"
-	"Total Writes:           " ULINTPF "\n\n",
-	(ulint)srv_stats.tpcc_wh_lru_wr, (ulint)srv_stats.tpcc_wh_cp_wr,
-	(ulint)srv_stats.tpcc_wh_sp_wr, (ulint)srv_stats.tpcc_wh_total_wr
-	);
-
-	fputs("Original Buffer\n", file);
-	fprintf(file,
-	"LRU Writes:             " ULINTPF "\n"
-	"Checkpoint Writes:      " ULINTPF "\n"
-	"Single Page Writes:     " ULINTPF "\n\n",
-	(ulint)srv_stats.original_lru_flush, (ulint)srv_stats.original_cp_flush,
-	(ulint)srv_stats.original_sp_flush
-	);
-
-	fputs("Warm Buffer\n", file);
-	fprintf(file,
-	"LRU Writes:             " ULINTPF "\n"
-	"Checkpoint Writes:      " ULINTPF "\n"
-	"Single Page Writes:     " ULINTPF "\n\n",
-	(ulint)srv_stats.warm_lru_flush, (ulint)srv_stats.warm_cp_flush,
-	(ulint)srv_stats.warm_sp_flush
-	);
-
-	fputs("---------------------------------\n", file);
-	buf_print_io(file);
-  /**/
-  #else
-  	/*kyong - write*/
-	fputs(
-		"-------------------------------\n"
-		"TPCC TABLE WRITE \n"
-		"--------------------------------\n",
-		file);
-	fputs("Customer\n", file);
-	fprintf(file,
-	"LRU Writes:             " ULINTPF "\n"
-	"Checkpoint Writes:      " ULINTPF "\n"
-	"Single Page Writes:     " ULINTPF "\n"
-	"Total Writes:           " ULINTPF "\n\n",
-	(ulint)srv_stats.tpcc_cust_lru_wr,
-	(ulint)srv_stats.tpcc_cust_cp_wr,
-	(ulint)srv_stats.tpcc_cust_sp_wr,
-	(ulint)srv_stats.tpcc_cust_total_wr
-	);
-
-	fputs("District\n", file);
-	fprintf(file,
-	"LRU Writes:             " ULINTPF "\n"
-	"Checkpoint Writes:      " ULINTPF "\n"
-	"Single Page Writes:     " ULINTPF "\n"
-	"Total Writes:           " ULINTPF "\n\n",
-	(ulint)srv_stats.tpcc_dist_lru_wr, 
-	 (ulint)srv_stats.tpcc_dist_cp_wr, 
-	(ulint)srv_stats.tpcc_dist_sp_wr,
-	(ulint)srv_stats.tpcc_dist_total_wr
-	);
-
-	fputs("History\n", file);
-	fprintf(file,
-	"LRU Writes:             " ULINTPF "\n"
-	"Checkpoint Writes:      " ULINTPF "\n"
-	"Single Page Writes:     " ULINTPF "\n"
-	"Total Writes:           " ULINTPF "\n\n",
-	(ulint)srv_stats.tpcc_his_lru_wr,
-	(ulint)srv_stats.tpcc_his_cp_wr, 
-	(ulint)srv_stats.tpcc_his_sp_wr,
-	(ulint)srv_stats.tpcc_his_total_wr
-	);
-	fputs("Item\n", file);
-	fprintf(file,
-	"LRU Writes:             " ULINTPF "\n"
-	"Checkpoint Writes:      " ULINTPF "\n"
-	"Single Page Writes:     " ULINTPF "\n"
-	"Total Writes:           " ULINTPF "\n\n",
-	(ulint)srv_stats.tpcc_itm_lru_wr, (ulint)srv_stats.tpcc_itm_cp_wr,
-	(ulint)srv_stats.tpcc_itm_sp_wr, (ulint)srv_stats.tpcc_itm_total_wr
-	);
-
-	fputs("New Orders\n", file);
-	fprintf(file,
-	"LRU Writes:             " ULINTPF "\n"
-	"Checkpoint Writes:      " ULINTPF "\n"
-	"Single Page Writes:     " ULINTPF "\n"
-	"Total Writes:           " ULINTPF "\n\n",
-	(ulint)srv_stats.tpcc_no_lru_wr, (ulint)srv_stats.tpcc_no_cp_wr,
-	(ulint)srv_stats.tpcc_no_sp_wr, (ulint)srv_stats.tpcc_no_total_wr
-	);
-
-	fputs("Order Line\n", file);
-	fprintf(file,
-	"LRU Writes:             " ULINTPF "\n"
-	"Checkpoint Writes:      " ULINTPF "\n"
-	"Single Page Writes:     " ULINTPF "\n"
-	"Total Writes:           " ULINTPF "\n\n",
-	(ulint)srv_stats.tpcc_ol_lru_wr, (ulint)srv_stats.tpcc_ol_cp_wr,
-	(ulint)srv_stats.tpcc_ol_sp_wr, (ulint)srv_stats.tpcc_ol_total_wr
-	);
-
-	fputs("Orders\n", file);
-	fprintf(file,
-	"LRU Writes:             " ULINTPF "\n"
-	"Checkpoint Writes:      " ULINTPF "\n"
-	"Single Page Writes:     " ULINTPF "\n"
-	"Total Writes:           " ULINTPF "\n\n",
-	(ulint)srv_stats.tpcc_or_lru_wr, (ulint)srv_stats.tpcc_or_cp_wr,
-	(ulint)srv_stats.tpcc_or_sp_wr, (ulint)srv_stats.tpcc_or_total_wr
-	);
-
-	fputs("Stock\n", file);
-	fprintf(file,
-	"LRU Writes:             " ULINTPF "\n"
-	"Checkpoint Writes:      " ULINTPF "\n"
-	"Single Page Writes:     " ULINTPF "\n"
-	"Total Writes:           " ULINTPF "\n\n",
-	(ulint)srv_stats.tpcc_stk_lru_wr, (ulint)srv_stats.tpcc_stk_cp_wr,
-	(ulint)srv_stats.tpcc_stk_sp_wr, (ulint)srv_stats.tpcc_stk_total_wr
-	);
-
-	fputs("Warehouse\n", file);
-	fprintf(file,
-	"LRU Writes:             " ULINTPF "\n"
-	"Checkpoint Writes:      " ULINTPF "\n"
-	"Single Page Writes:     " ULINTPF "\n"
-	"Total Writes:           " ULINTPF "\n\n",
-	(ulint)srv_stats.tpcc_wh_lru_wr, (ulint)srv_stats.tpcc_wh_cp_wr,
-	(ulint)srv_stats.tpcc_wh_sp_wr, (ulint)srv_stats.tpcc_wh_total_wr
-	);
-
-	fputs("Original Buffer\n", file);
-	fprintf(file,
-	"LRU Writes:             " ULINTPF "\n"
-	"Checkpoint Writes:      " ULINTPF "\n"
-	"Single Page Writes:     " ULINTPF "\n\n",
-	(ulint)srv_stats.original_lru_flush, (ulint)srv_stats.original_cp_flush,
-	(ulint)srv_stats.original_sp_flush
-	);
-
-	fputs("Warm Buffer\n", file);
-	fprintf(file,
-	"LRU Writes:             " ULINTPF "\n"
-	"Checkpoint Writes:      " ULINTPF "\n"
-	"Single Page Writes:     " ULINTPF "\n\n",
-	(ulint)srv_stats.warm_lru_flush, (ulint)srv_stats.warm_cp_flush,
-	(ulint)srv_stats.warm_sp_flush
-	);
-
-	fputs("---------------------------------\n", file);
-	buf_print_io(file);
-  #endif /* UNIV_WARM_BUF_CACHE*/
+#endif /*UNIV_TPCC_MONITOR*/
 
 	fputs("--------------\n"
 	      "ROW OPERATIONS\n"
@@ -1752,77 +1743,6 @@ srv_export_innodb_status(void)
 	buf_get_total_list_size_in_bytes(&buf_pools_list_size);
 
 	mutex_enter(&srv_innodb_monitor_mutex);
-
-	/*kyong - read*/
-	export_vars.tpcc_cust_disk_rd = srv_stats.tpcc_cust_disk_rd;
-	export_vars.tpcc_dist_disk_rd = srv_stats.tpcc_dist_disk_rd;
-	export_vars.tpcc_his_disk_rd = srv_stats.tpcc_his_disk_rd;
-	export_vars.tpcc_itm_disk_rd = srv_stats.tpcc_itm_disk_rd;
-	export_vars.tpcc_no_disk_rd = srv_stats.tpcc_no_disk_rd;
-	export_vars.tpcc_ol_disk_rd = srv_stats.tpcc_ol_disk_rd;
-	export_vars.tpcc_or_disk_rd = srv_stats.tpcc_or_disk_rd;
-	export_vars.tpcc_stk_disk_rd = srv_stats.tpcc_stk_disk_rd;
-	export_vars.tpcc_wh_disk_rd = srv_stats.tpcc_wh_disk_rd;
-
-	export_vars.tpcc_cust_buf_rd = srv_stats.tpcc_cust_buf_rd;
-	export_vars.tpcc_dist_buf_rd = srv_stats.tpcc_dist_buf_rd;
-	export_vars.tpcc_his_buf_rd = srv_stats.tpcc_his_buf_rd;
-	export_vars.tpcc_itm_buf_rd = srv_stats.tpcc_itm_buf_rd;
-	export_vars.tpcc_no_buf_rd = srv_stats.tpcc_no_buf_rd;
-	export_vars.tpcc_ol_buf_rd = srv_stats.tpcc_ol_buf_rd;
-	export_vars.tpcc_or_buf_rd = srv_stats.tpcc_or_buf_rd;
-	export_vars.tpcc_stk_buf_rd = srv_stats.tpcc_stk_buf_rd;
-	export_vars.tpcc_wh_buf_rd = srv_stats.tpcc_wh_buf_rd;
-
-	export_vars.tpcc_total_rd = srv_stats.tpcc_total_rd;
-	/**/
-
-	/*kyong - write*/
-	//lru write
-	export_vars.tpcc_cust_lru_wr = srv_stats.tpcc_cust_lru_wr;
-	export_vars.tpcc_dist_lru_wr = srv_stats.tpcc_dist_lru_wr;
-	export_vars.tpcc_his_lru_wr = srv_stats.tpcc_his_lru_wr;
-	export_vars.tpcc_itm_lru_wr = srv_stats.tpcc_itm_lru_wr;
-	export_vars.tpcc_no_lru_wr = srv_stats.tpcc_no_lru_wr;
-	export_vars.tpcc_ol_lru_wr = srv_stats.tpcc_ol_lru_wr;
-	export_vars.tpcc_or_lru_wr = srv_stats.tpcc_or_lru_wr;
-	export_vars.tpcc_stk_lru_wr = srv_stats.tpcc_stk_lru_wr;
-	export_vars.tpcc_wh_lru_wr = srv_stats.tpcc_wh_lru_wr;
-
-	//checkpoint write
-	export_vars.tpcc_cust_cp_wr = srv_stats.tpcc_cust_cp_wr;
-	export_vars.tpcc_dist_cp_wr = srv_stats.tpcc_dist_cp_wr;
-	export_vars.tpcc_his_cp_wr = srv_stats.tpcc_his_cp_wr;
-	export_vars.tpcc_itm_cp_wr = srv_stats.tpcc_itm_cp_wr;
-	export_vars.tpcc_no_cp_wr = srv_stats.tpcc_no_cp_wr;
-	export_vars.tpcc_ol_cp_wr = srv_stats.tpcc_ol_cp_wr;
-	export_vars.tpcc_or_cp_wr = srv_stats.tpcc_or_cp_wr;
-	export_vars.tpcc_stk_cp_wr = srv_stats.tpcc_stk_cp_wr;
-	export_vars.tpcc_wh_cp_wr = srv_stats.tpcc_wh_cp_wr;
-
-	//single page write
-	export_vars.tpcc_cust_sp_wr = srv_stats.tpcc_cust_sp_wr;
-	export_vars.tpcc_dist_sp_wr = srv_stats.tpcc_dist_sp_wr;
-	export_vars.tpcc_his_sp_wr = srv_stats.tpcc_his_sp_wr;
-	export_vars.tpcc_itm_sp_wr = srv_stats.tpcc_itm_sp_wr;
-	export_vars.tpcc_no_sp_wr = srv_stats.tpcc_no_sp_wr;
-	export_vars.tpcc_ol_sp_wr = srv_stats.tpcc_ol_sp_wr;
-	export_vars.tpcc_or_sp_wr = srv_stats.tpcc_or_sp_wr;
-	export_vars.tpcc_stk_sp_wr = srv_stats.tpcc_stk_sp_wr;
-	export_vars.tpcc_wh_sp_wr = srv_stats.tpcc_wh_sp_wr;
-
-	//total write
-	export_vars.tpcc_cust_total_wr = srv_stats.tpcc_cust_total_wr;
-	export_vars.tpcc_dist_total_wr = srv_stats.tpcc_dist_total_wr;
-	export_vars.tpcc_his_total_wr = srv_stats.tpcc_his_total_wr;
-	export_vars.tpcc_itm_total_wr = srv_stats.tpcc_itm_total_wr;
-	export_vars.tpcc_no_total_wr = srv_stats.tpcc_no_total_wr;
-	export_vars.tpcc_ol_total_wr = srv_stats.tpcc_ol_total_wr;
-	export_vars.tpcc_or_total_wr = srv_stats.tpcc_or_total_wr;
-	export_vars.tpcc_stk_total_wr = srv_stats.tpcc_stk_total_wr;
-	export_vars.tpcc_wh_total_wr = srv_stats.tpcc_wh_total_wr;
-  /**/
-
 
 	export_vars.innodb_data_pending_reads =
 		os_n_pending_reads;
@@ -1909,57 +1829,6 @@ srv_export_innodb_status(void)
 		srv_stats.dblwr_pages_written;
 
 	export_vars.innodb_dblwr_writes = srv_stats.dblwr_writes;
-
-#ifdef UNIV_WARM_BUF_CACHE
-    export_vars.innodb_warm_buf_pages_stored_stk = srv_stats.warm_buf_pages_stored_stk;
-    export_vars.innodb_warm_buf_pages_stored_ol = srv_stats.warm_buf_pages_stored_ol;
-    export_vars.innodb_warm_buf_pages_stored_cust = srv_stats.warm_buf_pages_stored_cust;
-
-    export_vars.innodb_warm_buf_pages_read_stk = srv_stats.warm_buf_pages_read_stk;
-    export_vars.innodb_warm_buf_pages_read_ol = srv_stats.warm_buf_pages_read_ol;
-    export_vars.innodb_warm_buf_pages_read_cust = srv_stats.warm_buf_pages_read_cust;
-
-    export_vars.innodb_warm_buf_pages_written_stk = srv_stats.warm_buf_pages_written_stk;
-    export_vars.innodb_warm_buf_pages_written_ol = srv_stats.warm_buf_pages_written_ol;
-    export_vars.innodb_warm_buf_pages_written_cust = srv_stats.warm_buf_pages_written_cust;
-
-	export_vars.innodb_move_to_warm_buf_cnt_stk = srv_stats.move_to_warm_buf_cnt_stk;
-	export_vars.innodb_move_to_warm_buf_cnt_ol = srv_stats.move_to_warm_buf_cnt_ol;
-	export_vars.innodb_move_to_warm_buf_cnt_cust = srv_stats.move_to_warm_buf_cnt_cust;
-
-	export_vars.innodb_stay_in_buf_cnt_stk = srv_stats.stay_in_buf_cnt_stk;
-	export_vars.innodb_stay_in_buf_cnt_ol = srv_stats.stay_in_buf_cnt_stk;
-	export_vars.innodb_stay_in_buf_cnt_cust = srv_stats.stay_in_buf_cnt_stk;
-
-	export_vars.innodb_warm_buf_pages_written_cp = srv_stats.warm_buf_pages_written_cp;
-	export_vars.innodb_warm_buf_pages_written_lru = srv_stats.warm_buf_pages_written_lru;
-
-
-	/***/
-	//normal buffer lru flush
-	export_vars.tpcc_cust_normal_lru = srv_stats.tpcc_cust_normal_lru;
-	export_vars.tpcc_stk_normal_lru = srv_stats.tpcc_stk_normal_lru;
-
-	//normal buffer cp flush
-	export_vars.tpcc_cust_normal_cp = srv_stats.tpcc_cust_normal_cp;
-	export_vars.tpcc_stk_normal_cp = srv_stats.tpcc_stk_normal_cp;
-
-	//normal buffer sp flush
-	export_vars.tpcc_cust_normal_sp = srv_stats.tpcc_cust_normal_sp;
-	export_vars.tpcc_stk_normal_sp = srv_stats.tpcc_stk_normal_sp;
-
-	//warm buffer lru flush
-	export_vars.tpcc_cust_warm_lru = srv_stats.tpcc_cust_warm_lru;
-	export_vars.tpcc_stk_warm_lru = srv_stats.tpcc_stk_warm_lru;
-
-	//warm buffer cp flush
-	export_vars.tpcc_cust_warm_cp = srv_stats.tpcc_cust_warm_cp;
-	export_vars.tpcc_stk_warm_cp = srv_stats.tpcc_stk_warm_cp;
-
-	//warm buffer sp flush
-	export_vars.tpcc_cust_warm_sp = srv_stats.tpcc_cust_warm_sp;
-	export_vars.tpcc_stk_warm_sp = srv_stats.tpcc_stk_warm_sp;
-#endif /* UNIV_WARM_BUF_CACHE */
 
 	export_vars.innodb_pages_created = stat.n_pages_created;
 
