@@ -250,7 +250,6 @@ srv_printf_innodb_monitor() will request mutex acquisition
 with mutex_enter(), which will wait until it gets the mutex. */
 #define MUTEX_NOWAIT(mutex_skipped)	((mutex_skipped) < MAX_MUTEX_NOWAIT)
 
-
 #ifdef UNIV_WARM_BUF_CACHE
 /** If true then enable WARM buffer */
 my_bool srv_use_warm_buf = FALSE;
@@ -258,12 +257,7 @@ my_bool srv_use_warm_buf = FALSE;
 ulint srv_warm_buf_pool_size = ULINT_MAX;
 /** Requested number of WARM buffer pool instances */
 ulong srv_warm_buf_pool_instances = 1;
-/** Wakeup the NVDIMM page cleaner when this % of free pages remaining */
-// ulong srv_nvdimm_pc_threshold_pct = 2;
-// /** NVDIMM-aware file resident directory */
-// char* srv_nvdimm_home_dir = NULL;
 #endif /* UNIV_WARM_BUF_CACHE */
-
 
 /** Requested size in bytes */
 ulint	srv_buf_pool_size	= ULINT_MAX;
@@ -332,7 +326,7 @@ ulint	srv_max_n_open_files	  = 300;
 
 /* Number of IO operations per second the server can do */
 ulong	srv_io_capacity         = 200;
-ulong	srv_max_io_capacity     = 400; 
+ulong	srv_max_io_capacity     = 400;
 
 /* The number of page cleaner threads to use.*/
 ulong	srv_n_page_cleaners = 4;
@@ -420,7 +414,7 @@ ulong	srv_doublewrite_batch_size	= 120;
 
 ulong	srv_replication_delay		= 0;
 
-/*kyong - tablespace*/
+#ifdef UNIV_TPCC_MONITOR
 //declare and initialize table space id
 ulint   srv_cust_space_id = 11;
 ulint   srv_dist_space_id = 12;
@@ -431,7 +425,7 @@ ulint   srv_ol_space_id = 16;
 ulint   srv_or_space_id = 17;
 ulint   srv_stk_space_id = 18;
 ulint   srv_wh_space_id = 19;
-/* end */
+#endif /*UNIV_TPCC_MONITOR*/
 
 /*-------------------------------------------*/
 ulong	srv_n_spin_wait_rounds	= 30;
@@ -1106,7 +1100,7 @@ srv_free(void)
     	os_event_destroy(warm_buf_flush_event);
 #endif /* UNIV_WARM_BUF_CACHE */
 	}
-	
+
 	os_event_destroy(srv_buf_resize_event);
 
 #ifdef UNIV_DEBUG
@@ -1346,6 +1340,9 @@ srv_printf_innodb_monitor(
 	buf_print_io(file);
 
 #ifdef UNIV_TPCC_MONITOR
+	fputs("---------------------\n"
+		"TPC-C Table I/O Monitoring\n"
+		"---------------------\n", file);
 
 	fprintf(file,
 		"Buffer Read Page:                 " ULINTPF "\n"
@@ -1498,168 +1495,6 @@ srv_printf_innodb_monitor(
 	"CKPT Writes:             " ULINTPF "\n"
 	"SPF  Writes:             " ULINTPF "\n\n",
 	(ulint) srv_stats.tpcc_ol_lru_wr, (ulint) srv_stats.tpcc_ol_cp_wr, (ulint) srv_stats.tpcc_ol_sp_wr);
-
-	
-#ifdef UNIV_WARM_BUF_CACHE
-
-	fputs("---------------------------------\n"
-	"[WARM CACHE] TPC-C Table Flush Type Monitoring\n"
-	"---------------------------------\n", file);
-
-	fprintf(file,
-		"Warm Cache Buffer Read Page:                 " ULINTPF "\n"
-		"Warm Cache Disk Read Page:                   " ULINTPF "\n"
-		"Warm Cache LRU Flush Page:                   " ULINTPF "\n"
-		"Warm Cache CP Flush Page:                    " ULINTPF "\n"
-		"Warm Cache SP Flush Page:                    " ULINTPF "\n"
-		"Warm Cache Free Page List:                   " ULINTPF "\n"
-		"Warm Cache LRU Scan Page:                    " ULINTPF "\n\n",
-		// "Avg.  Page :             %.2f      \n", 
-		(ulint) srv_stats.tpcc_warm_buf_rd, (ulint) srv_stats.tpcc_warm_disk_rd,
-		(ulint) srv_stats.tpcc_warm_lru_wr, (ulint) srv_stats.tpcc_warm_cp_wr, (ulint) srv_stats.tpcc_warm_sp_wr,
-		(ulint) srv_stats.tpcc_warm_fpage_list, (ulint) srv_stats.tpcc_warm_lru_scan
-	);
-
-	fputs(
-		"--------------------------------------\n"
-		"[WARM CACHE] TPC-C Table Read Type Monitoring\n"
-		"--------------------------------------\n", file);
-
-	fputs("Warehouse\n", file);
-	fprintf(file,
-	"Buffer Reads:    " ULINTPF "\n"
-	"Disk Reads:      " ULINTPF "\n\n",
-		(ulint)srv_stats.tpcc_warm_wh_buf_rd, (ulint)srv_stats.tpcc_warm_wh_disk_rd
-	);
-
-	fputs("Stock\n", file);
-	fprintf(file,
-	"Buffer Reads:    " ULINTPF "\n"
-	"Disk Reads:      " ULINTPF "\n\n",
-		(ulint)srv_stats.tpcc_warm_stk_buf_rd, (ulint)srv_stats.tpcc_warm_stk_disk_rd
-	);
-
-	fputs("Item\n", file);
-	fprintf(file,
-	"Buffer Reads:    " ULINTPF "\n"
-	"Disk Reads:      " ULINTPF "\n\n",
-		(ulint)srv_stats.tpcc_warm_itm_buf_rd, (ulint)srv_stats.tpcc_warm_itm_disk_rd
-	);
-
-	fputs("District\n", file);
-	fprintf(file,
-	"Buffer Reads:    " ULINTPF "\n"
-	"Disk Reads:      " ULINTPF "\n\n",
-		(ulint)srv_stats.tpcc_warm_dist_buf_rd, (ulint)srv_stats.tpcc_warm_dist_disk_rd
-	);
-
-	fputs("Customer\n", file);
-	fprintf(file,
-	"Buffer Reads:    " ULINTPF "\n"
-	"Disk Reads:      " ULINTPF "\n\n",
-	(ulint)srv_stats.tpcc_warm_cust_buf_rd, (ulint)srv_stats.tpcc_warm_cust_disk_rd
-	);
-
-	fputs("Orders\n", file);
-	fprintf(file,
-	"Buffer Reads:    " ULINTPF "\n"
-	"Disk Reads:      " ULINTPF "\n\n",
-		(ulint)srv_stats.tpcc_warm_or_buf_rd, (ulint)srv_stats.tpcc_warm_or_disk_rd
-	);
-
-	fputs("New Orders\n", file);
-	fprintf(file,
-	"Buffer Reads:    " ULINTPF "\n"
-	"Disk Reads:      " ULINTPF "\n\n",
-		(ulint)srv_stats.tpcc_warm_no_buf_rd, (ulint)srv_stats.tpcc_warm_no_disk_rd
-	);
-
-	fputs("History\n", file);
-	fprintf(file,
-	"Buffer Reads:    " ULINTPF "\n"
-	"Disk Reads:      " ULINTPF "\n\n",
-		(ulint)srv_stats.tpcc_warm_his_buf_rd, (ulint)srv_stats.tpcc_warm_his_disk_rd
-	);
-
-	fputs("Order Line\n", file);
-	fprintf(file,
-	"Buffer Reads:    " ULINTPF "\n"
-	"Disk Reads:      " ULINTPF "\n\n",
-		(ulint)srv_stats.tpcc_warm_ol_buf_rd, (ulint)srv_stats.tpcc_warm_ol_disk_rd
-	);
-
-	fputs("---------------------------------\n", file);
-
-	fputs("----------------------------------------\n"
-	"[WARM CACHE] TPC-C Table Flush Type Monitoring\n"
-	"-------------------------------------------\n", file);
-
-	fputs("Warehouse\n", file);
-	fprintf(file, 
-	"LRU  Writes:             " ULINTPF "\n"
-	"CKPT Writes:             " ULINTPF "\n"
-	"SPF  Writes:             " ULINTPF "\n\n",
-	(ulint) srv_stats.tpcc_warm_wh_lru_wr, (ulint) srv_stats.tpcc_warm_wh_cp_wr, (ulint) srv_stats.tpcc_warm_wh_sp_wr);
-
-	fputs("Stock\n", file);
-	fprintf(file, 
-	"LRU  Writes:             " ULINTPF "\n"
-	"CKPT Writes:             " ULINTPF "\n"
-	"SPF  Writes:             " ULINTPF "\n\n",
-	(ulint) srv_stats.tpcc_warm_stk_lru_wr, (ulint) srv_stats.tpcc_warm_stk_cp_wr, (ulint) srv_stats.tpcc_warm_stk_sp_wr);
-
-	fputs("Item\n", file);
-	fprintf(file, 
-	"LRU  Writes:             " ULINTPF "\n"
-	"CKPT Writes:             " ULINTPF "\n"
-	"SPF  Writes:             " ULINTPF "\n\n",
-	(ulint) srv_stats.tpcc_warm_itm_lru_wr, (ulint) srv_stats.tpcc_warm_itm_cp_wr, (ulint) srv_stats.tpcc_warm_itm_sp_wr);
-
-	fputs("District\n", file);
-	fprintf(file, 
-	"LRU  Writes:             " ULINTPF "\n"
-	"CKPT Writes:             " ULINTPF "\n"
-	"SPF  Writes:             " ULINTPF "\n\n",
-	(ulint) srv_stats.tpcc_warm_dist_lru_wr, (ulint) srv_stats.tpcc_warm_dist_cp_wr, (ulint) srv_stats.tpcc_warm_dist_sp_wr);
-
-	fputs("Customer\n", file);
-	fprintf(file, 
-	"LRU  Writes:             " ULINTPF "\n"
-	"CKPT Writes:             " ULINTPF "\n"
-	"SPF  Writes:             " ULINTPF "\n\n",
-	(ulint) srv_stats.tpcc_warm_cust_lru_wr, (ulint) srv_stats.tpcc_warm_cust_cp_wr, (ulint) srv_stats.tpcc_warm_cust_sp_wr);
-
-	fputs("Orders\n", file);
-	fprintf(file, 
-	"LRU  Writes:             " ULINTPF "\n"
-	"CKPT Writes:             " ULINTPF "\n"
-	"SPF  Writes:             " ULINTPF "\n\n",
-	(ulint) srv_stats.tpcc_warm_or_lru_wr, (ulint) srv_stats.tpcc_warm_or_cp_wr, (ulint) srv_stats.tpcc_warm_or_sp_wr);
-
-	fputs("New Orders\n", file);
-	fprintf(file, 
-	"LRU  Writes:             " ULINTPF "\n"
-	"CKPT Writes:             " ULINTPF "\n"
-	"SPF  Writes:             " ULINTPF "\n\n",
-	(ulint) srv_stats.tpcc_warm_no_lru_wr, (ulint) srv_stats.tpcc_warm_no_cp_wr, (ulint) srv_stats.tpcc_warm_no_sp_wr);
-
-	fputs("History\n", file);
-	fprintf(file, 
-	"LRU  Writes:             " ULINTPF "\n"
-	"CKPT Writes:             " ULINTPF "\n"
-	"SPF  Writes:             " ULINTPF "\n\n",
-	(ulint) srv_stats.tpcc_warm_his_lru_wr, (ulint) srv_stats.tpcc_warm_his_cp_wr, (ulint) srv_stats.tpcc_warm_his_sp_wr);
-
-	fputs("ORDER_LINE\n", file);
-	fprintf(file, 
-	"LRU  Writes:             " ULINTPF "\n"
-	"CKPT Writes:             " ULINTPF "\n"
-	"SPF  Writes:             " ULINTPF "\n\n",
-	(ulint) srv_stats.tpcc_warm_ol_lru_wr, (ulint) srv_stats.tpcc_warm_ol_cp_wr, (ulint) srv_stats.tpcc_warm_ol_sp_wr);
-
-#endif /*UNIV_WARM_BUF_CACHE*/
-
-	// buf_print_io(file);
 #endif /*UNIV_TPCC_MONITOR*/
 
 	fputs("--------------\n"

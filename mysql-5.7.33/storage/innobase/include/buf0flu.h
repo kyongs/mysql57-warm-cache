@@ -38,7 +38,6 @@ Created 11/5/1995 Heikki Tuuri
 #include "ut0byte.h"
 #include "log0log.h"
 #ifndef UNIV_HOTBACKUP
-#include "buf0types.h"
 
 /** Flag indicating if the page_cleaner is in active state. */
 extern bool buf_page_cleaner_is_active;
@@ -273,7 +272,6 @@ Initialize page_cleaner. */
 void
 buf_flush_page_cleaner_init(void);
 
-
 #ifdef UNIV_WARM_BUF_CACHE
 /******************************************************************//**
 page_cleaner thread tasked with flushing dirty pages from the buffer
@@ -285,22 +283,7 @@ DECLARE_THREAD(warm_buf_flush_page_cleaner_coordinator)(
 /*===============================================*/
 	void*	arg);		/*!< in: a dummy parameter required by
 				os_thread_create */
-/******************************************************************//**
-Worker thread of page_cleaner.
-@return a dummy parameter */
-extern "C"
-os_thread_ret_t
-DECLARE_THREAD(warm_buf_flush_page_cleaner_worker)(
-/*==========================================*/
-	void*	arg);		/*!< in: a dummy parameter required by
-				os_thread_create */
-
-/******************************************************************//**
-/*Initialize warm buffer page cleaner*/
-void warm_buf_flush_page_cleaner_init(void);
-
 #endif /*UNIV_WARM_BUF_CACHE*/
-
 /*=============================*/
 /*********************************************************************//**
 Clears up tail of the LRU lists:

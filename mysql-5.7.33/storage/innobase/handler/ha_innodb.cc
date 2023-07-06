@@ -20301,7 +20301,6 @@ static MYSQL_SYSVAR_BOOL(sync_debug, srv_sync_debug,
   "Enable the sync debug checks",
   NULL, NULL, FALSE);
 #endif /* UNIV_DEBUG */
-
 #ifdef UNIV_WARM_BUF_CACHE
 static MYSQL_SYSVAR_BOOL(use_warm_buffer, srv_use_warm_buf,
   PLUGIN_VAR_NOCMDARG | PLUGIN_VAR_READONLY,
@@ -20500,7 +20499,6 @@ static struct st_mysql_sys_var* innobase_system_variables[]= {
   MYSQL_SYSVAR(master_thread_disabled_debug),
   MYSQL_SYSVAR(sync_debug),
 #endif /* UNIV_DEBUG */
-
   NULL
 };
 

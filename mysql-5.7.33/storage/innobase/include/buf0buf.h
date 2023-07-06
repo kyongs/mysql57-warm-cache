@@ -100,8 +100,7 @@ extern	buf_pool_t*	buf_pool_ptr;	/*!< The buffer pools
 					of the database */
 
 #ifdef UNIV_WARM_BUF_CACHE
-extern buf_pool_t *warm_buf_pool_ptr; /*!< The WARM buffer pools
-                    of the database */
+extern buf_pool_t *warm_buf_pool_ptr; /*!< The WARM buffer pools  of the database */
 #endif /* UNIV_WARM_BUF_CACHE */
 
 #ifdef UNIV_DEBUG
@@ -458,12 +457,7 @@ zero if all modified pages have been flushed to disk.
 @return oldest modification in pool, zero if none */
 lsn_t
 buf_pool_get_oldest_modification(void);
-
 /*==================================*/
-// #ifdef UNIV_WARM_BUF_CACHE
-// /*Gets the smallest oldest_modification lsn for any page in the warm buffer pool.*/
-// lsn_t warm_buf_pool_get_oldest_modification(void);
-// #endif /*UNIV_WARM_BUF_CACHE*/
 
 /********************************************************************//**
 Allocates a buf_page_t descriptor. This function must succeed. In case
@@ -966,6 +960,7 @@ Returns the number of pending buf pool read ios.
 @return number of pending read I/O operations */
 ulint
 buf_get_n_pending_read_ios(void);
+/*============================*/
 
 #ifdef UNIV_WARM_BUF_CACHE
 /************************************
@@ -975,6 +970,8 @@ ulint
 warm_buf_get_n_pending_read_ios(void);
 #endif /*UNIV_WARM_BUF_CACHE*/
 /*============================*/
+
+
 /*********************************************************************//**
 Prints info of the buffer i/o. */
 void
@@ -1312,6 +1309,24 @@ buf_page_init_for_read(
 	const page_id_t&	page_id,
 	const page_size_t&	page_size,
 	ibool			unzip);
+
+#ifdef UNIV_WARM_BUF_CACHE
+buf_page_t*
+warm_buf_page_init_for_read(
+	dberr_t*		err,
+	ulint			mode,
+	const page_id_t&	page_id,
+	const page_size_t&	page_size,
+	ibool			unzip);
+
+bool
+warm_buf_page_io_complete(
+/*=================*/
+	buf_page_t*	bpage, buf_page_t* warm_buf_page
+);
+
+
+#endif /*UNIV_WARM_BUF_CACHE*/
 
 /********************************************************************//**
 Completes an asynchronous read or write request of a file page to or from
@@ -1712,7 +1727,6 @@ public:
 					or buf_block_t::mutex. */
 # endif /* UNIV_DEBUG */
 #endif /* !UNIV_HOTBACKUP */
-
 #ifdef UNIV_TPCC_MONITOR
 	ulint disk_rd_cnt; /**/
 
@@ -1722,7 +1736,6 @@ public:
 
 	ulint discard_cnt; /**/
 #endif /*UNIV_TPCC_MONITOR*/
-
 #ifdef UNIV_WARM_BUF_CACHE
     bool cached_in_warm_buf; /*!< TRUE if the page is cached
                              in the WARM buffer */

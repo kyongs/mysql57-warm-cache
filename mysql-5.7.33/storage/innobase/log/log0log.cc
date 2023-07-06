@@ -2216,7 +2216,7 @@ loop:
 		os_thread_sleep(100000);
 		if (srv_print_verbose_log && count > 600) {
 			ib::info() << "Waiting for WARM buffer page_cleaner to"
-				" finish flushing of buffer pool";
+				" finish flushing of buffer pool"; /// 여기 걸린다.
 			count = 0;
 		}
 	}

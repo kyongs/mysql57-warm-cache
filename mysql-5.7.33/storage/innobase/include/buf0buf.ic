@@ -85,7 +85,6 @@ buf_pool_index(
 	const buf_pool_t*	buf_pool)	/*!< in: buffer pool */
 {
 	ulint	i = buf_pool - buf_pool_ptr;
-
 #ifdef UNIV_WARM_BUF_CACHE
     if (i >= srv_buf_pool_instances) {
         i = buf_pool - warm_buf_pool_ptr + srv_buf_pool_instances;
@@ -97,7 +96,6 @@ buf_pool_index(
     ut_ad(i < srv_buf_pool_instances);
     return(i);
 #endif /* UNIV_WARM_BUF_CACHE */
-
 }
 
 /******************************************************************//**
@@ -111,7 +109,6 @@ buf_pool_from_bpage(
 {
 	ulint	i;
 	i = bpage->buf_pool_index;
-
 #ifdef UNIV_WARM_BUF_CACHE
     if (i < srv_buf_pool_instances) {
         ut_ad(i < srv_buf_pool_instances);
@@ -123,7 +120,6 @@ buf_pool_from_bpage(
     ut_ad(i < srv_buf_pool_instances);
     return(&buf_pool_ptr[i]);
 #endif /* UNIV_WARM_BUF_CACHE */
-
 }
 
 /******************************************************************//**
@@ -1036,32 +1032,21 @@ buf_pool_get(
 	const page_id_t&	page_id)
 {
 #ifdef UNIV_WARM_BUF_CACHE
-
 	// Check if the page is in Warm Buffer
 	for (int warm_idx = 0; warm_idx < srv_warm_buf_pool_instances; warm_idx++){
 		if (buf_page_hash_get_low(&warm_buf_pool_ptr[warm_idx], page_id)){
 			return &warm_buf_pool_ptr[warm_idx];
 		}
 	}
-
-	/* If the page is not in warm buffer, the page must be stored in original buffer*/
-    ulint       ignored_page_no = page_id.page_no() >> 6;
-    page_id_t   id(page_id.space(), ignored_page_no);
-    ulint       i = id.fold() % srv_buf_pool_instances;
-
-    return(&buf_pool_ptr[i]);
-	
-#else
-    /* 2log of BUF_READ_AHEAD_AREA (64) */
-    ulint       ignored_page_no = page_id.page_no() >> 6;
-
-    page_id_t   id(page_id.space(), ignored_page_no);
-
-    ulint       i = id.fold() % srv_buf_pool_instances;
-
-    return(&buf_pool_ptr[i]);
 #endif /* UNIV_WARM_BUF_CACHE */
+        /* 2log of BUF_READ_AHEAD_AREA (64) */
+        ulint		ignored_page_no = page_id.page_no() >> 6;
 
+        page_id_t	id(page_id.space(), ignored_page_no);
+
+        ulint		i = id.fold() % srv_buf_pool_instances;
+
+        return(&buf_pool_ptr[i]);
 }
 
 /******************************************************************//**
@@ -1074,15 +1059,14 @@ buf_pool_from_array(
 	ulint	index)		/*!< in: array index to get
 				buffer pool instance from */
 {
-	ut_ad(index < MAX_BUFFER_POOLS);
-	ut_ad(index < srv_buf_pool_instances);
-
 #ifdef UNIV_WARM_BUF_CACHE
     if (index >= srv_buf_pool_instances) {
         return(&warm_buf_pool_ptr[index - srv_buf_pool_instances]);
     }
 #endif /* UNIV_WARM_BUF_CACHE */
 
+	ut_ad(index < MAX_BUFFER_POOLS);
+	ut_ad(index < srv_buf_pool_instances);
 	return(&buf_pool_ptr[index]);
 }
 
@@ -1114,7 +1098,7 @@ buf_page_hash_get_low(
 			  && buf_page_in_file(bpage)),
 		    page_id.equals_to(bpage->id));
 	if (bpage) {
-		ut_a(buf_page_in_file(bpage)); /////여기
+		ut_a(buf_page_in_file(bpage));
 		ut_ad(bpage->in_page_hash);
 		ut_ad(!bpage->in_zip_hash);
 		ut_ad(buf_pool_from_bpage(bpage) == buf_pool);
@@ -1387,7 +1371,7 @@ buf_pool_mutex_exit_all(void)
 {
 	ulint   i;
 
-	for (ulint i = 0; i < srv_buf_pool_instances; i++) {
+	for (i = 0; i < srv_buf_pool_instances; i++) {
 		buf_pool_t*	buf_pool;
 
 		buf_pool = buf_pool_from_array(i);

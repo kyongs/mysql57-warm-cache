@@ -1056,7 +1056,7 @@ buf_flush_write_block_low(
 
 	ut_ad(bpage->newest_modification != 0);
 
-	/* Force the log to the disk before writing the modified block */
+	/* Force the log to the disk before writing the modified block */ 
 	if (!srv_read_only_mode) {
 		//[ky] 참고: NV-SQL에서는 이 부분에 로깅이 필요없기 때문에 warm buffer가 아닌 경우에만 log write 적용
 		log_write_up_to(bpage->newest_modification, true);
@@ -1105,7 +1105,6 @@ buf_flush_write_block_low(
 		&& page_is_leaf(((buf_block_t*) bpage)->frame) //only leaf
 		&& is_tpcc_table(bpage) //only tpcc table 
 		&& bpage->id.page_no() > 7 //not header pages
-		// && dict_index_is_clust(((buf_block_t*) bpage)->index) 
 		) {
 		/* Generate warm buffer page */
         buf_page_t *warm_buf_page;
@@ -1113,33 +1112,91 @@ buf_flush_write_block_low(
         const page_size_t page_size = page_size_t(bpage->size.logical(), bpage->size.logical(), false);
         dberr_t err;
 
-        /* Add the target page to the WARM_BUF buffer. */
-        warm_buf_page = buf_page_init_for_read(&err, BUF_MOVE_TO_WARM_BUF, page_id, page_size, false);
-        
-        if (warm_buf_page == NULL)     goto normal;
+		/* ****************
+			VERSION I 
+		********************/
+		// buf_pool_t* buf_pool = buf_pool_get(page_id);
+		// buf_pool_t* warm_buf_pool =  &warm_buf_pool_ptr[0]; 
 
-		// ib::info() << "page_id = " << bpage->id.space()
-        // << " offset = " << bpage->id.page_no() 
-        // << " dst = " << &(((buf_block_t *)warm_buf_page)->frame) << " src = " << &(((buf_block_t *)bpage)->frame)
-        // << " flush-type = " << bpage->flush_type;
+		// // /**  기존 코드  **/
+		// // /*
+		// // ib::info()<<"move to warm buf 1 "<<page_id.space()<<" "<<page_id.page_no();
+		// warm_buf_page = buf_page_init_for_read(&err, BUF_MOVE_TO_WARM_BUF, page_id, page_size, false);
+		// // ib::info()<<"move to warm buf 2 "<<page_id.space()<<" "<<page_id.page_no();
 
-		memcpy(((buf_block_t *)warm_buf_page)->frame, ((buf_block_t *)bpage)->frame, UNIV_PAGE_SIZE);
+		// if (warm_buf_page == NULL)	goto normal;
 
-		// srv_stats.tpcc_move_to_warm_buf.inc();
+		// memcpy(((buf_block_t *)warm_buf_page)->frame, ((buf_block_t *)bpage)->frame, UNIV_PAGE_SIZE); 
+		// // ib::info()<<"move to warm buf 3 "<<page_id.space()<<" "<<page_id.page_no();
 
-		// /* Set the oldest LSN of the warm buf page smae as bpage LSN */
+
+		// buf_flush_note_modification((buf_block_t *)warm_buf_page, bpage->oldest_modification, bpage->newest_modification, warm_buf_page->flush_observer);
+		// // ib::info()<<"move to warm buf 4 "<<page_id.space()<<" "<<page_id.page_no();
 		
-		buf_flush_note_modification((buf_block_t *)warm_buf_page, bpage->oldest_modification, bpage->newest_modification, warm_buf_page->flush_observer);
-		// ib::info() << warm_buf_page->id.space() << " "
-        //          << warm_buf_page->id.page_no() << " is moved to "
-        //          << warm_buf_page->buf_pool_index << " from " << bpage->buf_pool_index;
-        // }
-		// ib::info()<<"bpage         "<<bpage->id.space()<<" "<<bpage->id.page_no()<<" ";
-		// ib::info()<<"warm_buf_page "<<warm_buf_page->id.space()<<" "<<warm_buf_page->id.page_no()<<""; //<<warm_buf_page->in_flush_list;
-		buf_page_io_complete(bpage, true); // 	bpage는 flush list에서 제거, lru list에서도 제거 //io_type: write, evict true, evict if문
-		buf_page_io_complete(warm_buf_page); // //io_type: read, BUF_IO_READ else, BUF_IO_READ // buf_page_set_io_fix to BUF_IO_NONE > pending read수 줄이고 끝
 
-		// 여기에서 flush list로 들어가는지 등을 확인해봐야함
+		// // ib::info() << bpage->id.space() << " " << bpage->id.page_no()
+		// // 	<< " is moved from buffer pool idx " << buf_pool_index(buf_pool) 
+		// // 	<< " to buffer pool idx " << buf_pool_index(warm_buf_pool);
+
+
+		// buf_page_io_complete(bpage, true); //얘는 더이상 접근되지 않으니까 편하게 flush하면 된다.
+		// // ib::info()<<"move to warm buf 5 "<<page_id.space()<<" "<<page_id.page_no();
+
+		// buf_page_io_complete(warm_buf_page); // buf_page_set_io_fix to BUF_IO_NONE > pending read수 줄이고 끝
+		// // ib::info()<<"move to warm buf 6 "<<page_id.space()<<" "<<page_id.page_no();
+
+
+		/* ****************
+			VERSION II 
+		********************/
+		// buf_pool_t* buf_pool = buf_pool_get(page_id);
+		// buf_pool_t* warm_buf_pool = &warm_buf_pool_ptr[0];
+
+		// buf_pool_mutex_enter(buf_pool);
+		
+		// //이 안에서 warm buffer mutex를 잡는다.
+		// ib::info()<<"move_to_warm_buf 1 "<<bpage->id.space()<<" "<<bpage->id.page_no();
+		// warm_buf_page = warm_buf_page_init_for_read(&err, BUF_MOVE_TO_WARM_BUF, page_id, page_size, false); 
+
+		// if(warm_buf_page != NULL){
+		// 	//memcpy
+		// 	ib::info()<<"move_to_warm_buf 2 "<<bpage->id.space()<<" "<<bpage->id.page_no();
+		// 	memcpy(((buf_block_t *)warm_buf_page)->frame, ((buf_block_t *)bpage)->frame, UNIV_PAGE_SIZE); 
+		// 	// ib::info()<<"warm_buf_page_init_for_read 5 "<<page_id.space()<<" "<<page_id.page_no();
+		// 	ib::info()<<"move_to_warm_buf 3 "<<bpage->id.space()<<" "<<bpage->id.page_no();
+		// 	buf_flush_note_modification((buf_block_t *)warm_buf_page, bpage->oldest_modification, bpage->newest_modification, warm_buf_page->flush_observer);
+		// 	buf_pool_mutex_exit(warm_buf_pool);
+		// 	buf_pool_mutex_exit(buf_pool);
+		// 	ib::info()<<"move_to_warm_buf 4 "<<bpage->id.space()<<" "<<bpage->id.page_no();
+		// 	buf_page_io_complete(bpage, true); //얘는 더이상 접근되지 않으니까 편하게 flush하면 된다.
+
+		// 	// warm_buf_page_io_complete(bpage, warm_buf_page);
+		// 	buf_page_io_complete(warm_buf_page); 
+		// 	ib::info()<<"move_to_warm_buf 5 "<<bpage->id.space()<<" "<<bpage->id.page_no();
+		// }
+
+		/* ****************
+			VERSION III 
+		********************/
+		buf_pool_t* buf_pool = buf_pool_get(page_id);
+		buf_pool_t* warm_buf_pool =  &warm_buf_pool_ptr[0]; 
+
+		// buf_pool_mutex_enter(buf_pool);
+		warm_buf_page = warm_buf_page_init_for_read(&err, BUF_MOVE_TO_WARM_BUF, page_id, page_size, false);
+		
+		// buf_pool_mutex_exit(buf_pool);
+
+
+		if(warm_buf_page != NULL) {
+			memcpy(((buf_block_t *)warm_buf_page)->frame, ((buf_block_t *)bpage)->frame, UNIV_PAGE_SIZE); 
+			buf_pool_mutex_exit(warm_buf_pool);
+			buf_flush_note_modification((buf_block_t *)warm_buf_page, bpage->oldest_modification, bpage->newest_modification, warm_buf_page->flush_observer);
+
+			buf_page_io_complete(bpage, true); //얘는 더이상 접근되지 않으니까 편하게 flush하면 된다. //여ㅕ기서 조곰
+
+			buf_page_io_complete(warm_buf_page); // buf_page_set_io_fix to BUF_IO_NONE > pending read수 줄이고 끝
+		} else		goto normal;
+
 
     } else {
 normal:
@@ -1201,9 +1258,13 @@ normal:
             // pm_mmap_write_logfile_header_lsn(bpage->oldest_modification);
 
         } else if (flush_type == BUF_FLUSH_SINGLE_PAGE) {
-			
+			if(bpage->buf_pool_index >= srv_buf_pool_instances){
+				ib::info()<<"warm buf single page flush start "<<bpage->id.space()<<" "<<bpage->id.page_no();
+			}
             buf_dblwr_write_single_page(bpage, sync);
-			// ib::info()<<"[ky] single page flush: "<<sync;
+			if(bpage->buf_pool_index >= srv_buf_pool_instances){
+				ib::info()<<"warm buf single page flush end";
+			}
 			
         } else {
             ut_ad(!sync);
@@ -1213,9 +1274,9 @@ normal:
            and we flush the changes to disk only for the tablespace we
            are working on. */
         if (sync) {
-            // if (!bpage->cached_in_warm_buf) { /// FIXME
-			ut_ad(flush_type == BUF_FLUSH_SINGLE_PAGE);
-			fil_flush(bpage->id.space());
+            // if (!bpage->cached_in_warm_buf) { //여기서 SP를 막음
+				ut_ad(flush_type == BUF_FLUSH_SINGLE_PAGE);
+				fil_flush(bpage->id.space());
             // }
             
             /* true means we want to evict this page from the
@@ -1896,11 +1957,11 @@ warm_buf_flush_LRU_list_batch(
 
 	ut_ad(buf_pool_mutex_own(buf_pool));
 
-	if (buf_pool->curr_size < buf_pool->old_size
-	    && buf_pool->withdraw_target > 0) {
-		withdraw_depth = buf_pool->withdraw_target
-				 - UT_LIST_GET_LEN(buf_pool->withdraw);
-	}
+	// if (buf_pool->curr_size < buf_pool->old_size
+	//     && buf_pool->withdraw_target > 0) {
+	// 	withdraw_depth = buf_pool->withdraw_target
+	// 			 - UT_LIST_GET_LEN(buf_pool->withdraw);
+	// }
 
 	for (bpage = UT_LIST_GET_LAST(buf_pool->LRU);
 	     bpage != NULL && count + evict_count < max
@@ -2124,6 +2185,7 @@ warm_buf_do_flush_list_batch(
 		buf_flush_list_mutex_enter(buf_pool);
 
 		ut_ad(flushed || buf_pool->flush_hp.is_hp(prev));
+		// ut_ad( buf_pool->flush_hp.is_hp(prev));
 
 		--len;
 	}
@@ -4649,6 +4711,38 @@ warm_buf_pc_sleep_if_needed(
 	return(OS_SYNC_TIME_EXCEEDED);
 }
 
+bool
+warm_buf_flush_do_batch(
+	buf_pool_t*		buf_pool,
+	buf_flush_t		type,
+	ulint			min_n,
+	lsn_t			lsn_limit,
+	ulint*			n_processed)
+{
+	ut_ad(type == BUF_FLUSH_LRU);
+
+	if (n_processed != NULL) {
+		*n_processed = 0;
+	}
+
+	if (!buf_flush_start(buf_pool, type)) {
+        ib::info() << "fail.." << buf_pool->n_flush[BUF_FLUSH_LRU] << " " << buf_pool->init_flush[BUF_FLUSH_LRU] << " in " << buf_pool->instance_no; 
+		return(false);
+	}
+    
+	buf_pool_mutex_enter(buf_pool);
+    ulint   page_count = warm_buf_flush_LRU_list_batch(buf_pool, min_n);
+	buf_pool_mutex_exit(buf_pool);
+    
+	buf_flush_end(buf_pool, type);
+    
+	if (n_processed != NULL) {
+		*n_processed = page_count;
+	}
+
+	return(true);
+}
+
 
 static
 ulint
@@ -4878,273 +4972,115 @@ DECLARE_THREAD(warm_buf_flush_page_cleaner_coordinator)(
 			/*!< in: a dummy parameter required by
 			os_thread_create */
 {
-	ib_time_monotonic_t	next_loop_time = ut_time_monotonic_ms() + 1000;
-	ulint	n_flushed = 0;
-	ulint	last_activity = srv_get_activity_count();
-	ulint	last_pages = 0;
-
-	my_thread_init();
+    my_thread_init();
 
 #ifdef UNIV_PFS_THREAD
 	pfs_register_thread(warm_buf_page_cleaner_thread_key);
 #endif /* UNIV_PFS_THREAD */
+    
+    warm_buf_page_cleaner_is_active = true;
 
-	warm_buf_page_cleaner_is_active = true;
-	os_event_wait(warm_buf_flush_event);
+    ulint n_flushed = 0;
+    ulint next_loop_time = ut_time_monotonic_ms() + 1000;
+    ulint last_activity = srv_get_activity_count();
 
-	ulint		ret_sleep = 0;
-	ulint		n_evicted = 0;
-	ulint		n_flushed_last = 0;
-	ulint		warn_interval = 1;
-	ulint		warn_count = 0;
-	int64_t		sig_count = os_event_reset(warm_buf_flush_event);
+    os_event_wait(warm_buf_flush_event);
 
-	while (srv_shutdown_state == SRV_SHUTDOWN_NONE) {
+    ulint ret_sleep = 0;
+    ulint warn_interval = 1;
+    ulint warn_count = 0;
+    buf_pool_t* buf_pool = &warm_buf_pool_ptr[0];
+    
+    int64_t sig_count = os_event_reset(warm_buf_flush_event);
 
-		/* The page_cleaner skips sleep if the server is
-		idle and there are no pending IOs in the buffer pool
-		and there is work to do. */
-		if (srv_check_activity(last_activity)
-		    || warm_buf_get_n_pending_read_ios()
-		    || n_flushed == 0) {
+    while (srv_shutdown_state == SRV_SHUTDOWN_NONE) {
+        if (srv_check_activity(last_activity) || n_flushed == 0) {
+            ret_sleep = warm_buf_pc_sleep_if_needed(next_loop_time, sig_count);
+        } else if (ut_time_monotonic_ms() > next_loop_time) {
+            ret_sleep = OS_SYNC_TIME_EXCEEDED;
+        } else {
+            ret_sleep = 0;
+        }
 
-			ret_sleep = warm_buf_pc_sleep_if_needed(next_loop_time, sig_count);
+        sig_count = os_event_reset(warm_buf_flush_event);
 
-			if (srv_shutdown_state != SRV_SHUTDOWN_NONE) {
-				break;
-			}
-		} else if (ut_time_monotonic_ms() > next_loop_time) {
-			ret_sleep = OS_SYNC_TIME_EXCEEDED;
-		} else {
-			ret_sleep = 0;
-		}
+        if (ret_sleep == OS_SYNC_TIME_EXCEEDED) {
+            ulint curr_time = ut_time_monotonic_ms();
 
-		sig_count = os_event_reset(warm_buf_flush_event);
+            if (curr_time > next_loop_time + 3000) {
+                if (warn_count == 0) {
+                    ib::info()
+                        << "Warm Buf Page cleaner took "
+                        << 1000 + curr_time - next_loop_time; 
+                    if (warn_interval > 300) {
+                        warn_interval = 600;
+                    } else {
+                        warn_interval *= 2;
+                    }
 
-		if (ret_sleep == OS_SYNC_TIME_EXCEEDED) {
-			ib_time_monotonic_ms_t curr_time =
-						ut_time_monotonic_ms();
+                    warn_count = warn_interval;
+                } else {
+                    --warn_count;
+                }
+            } else {
+                /* reset counter */
+                warn_interval = 1;
+                warn_count = 0;
+            }
+			// ib::info()<<"warm page cleaner 2 ";
+            next_loop_time = curr_time + 1000;
+        }
 
-			if (curr_time > next_loop_time + 3000) {
-				if (warn_count == 0) {
-					ib::info() << "warm buffer page_cleaner: 1000ms"
-						" intended loop took "
-						<< 1000 + curr_time
-						   - next_loop_time
-						<< "ms. The settings might not"
-						" be optimal. (flushed="
-						<< n_flushed_last
-						<< " and evicted="
-						<< n_evicted
-						<< ", during the time.)";
-					if (warn_interval > 300) {
-						warn_interval = 600;
-					} else {
-						warn_interval *= 2;
-					}
+        /* TODO: Need to fix for shutdown */
+        // if (!warm_buf_page_cleaner->is_running) {
+        //     break;
+        // }
+        
+        if (srv_check_activity(last_activity)) {
+            /* Flush pages from end of LRU */
+			ib::info()<<"warm page cleaner coordinator do batch LRU start ";
+            warm_buf_flush_do_batch(buf_pool, BUF_FLUSH_LRU, 1024, 0, &n_flushed);
+			ib::info()<<"warm page cleaner coordinator do batch LRU end >> flushed pages: "<<n_flushed;
+        }
+    }
 
-					warn_count = warn_interval;
-				} else {
-					--warn_count;
-				}
-			} else {
-				/* reset counter */
-				warn_interval = 1;
-				warn_count = 0;
-			}
+    if (srv_fast_shutdown == 2
+            || srv_shutdown_state == SRV_SHUTDOWN_EXIT_THREADS) {
+        /* In very fast shutdown or when innodb failed to start, we
+           simulate a crash of the buffer pool. We are not required to do
+           any flushing. */
+        goto thread_exit;
+    }
 
-			next_loop_time = curr_time + 1000;
-			n_flushed_last = n_evicted = 0;
-		}
-
-		if (srv_check_activity(last_activity)) {
-			ulint	n_to_flush;
-			lsn_t	lsn_limit = 0;
-
-			/* Estimate pages from flush_list to be flushed */
-			if (ret_sleep == OS_SYNC_TIME_EXCEEDED) {
-				last_activity = srv_get_activity_count();
-				n_to_flush =
-					warm_buf_page_cleaner_flush_pages_recommendation(
-						&lsn_limit, last_pages); //여기에서 cp flush할 페이지의 개수를 구함
-			
-			} else {
-				n_to_flush = 0;
-			}
-
-			/* Request flushing for threads */
-			warm_buf_pc_request(n_to_flush, lsn_limit);
-
-			ib_time_monotonic_ms_t tm = ut_time_monotonic_ms();
-
-			/* Coordinator also treats requests */
-			while (warm_buf_pc_flush_slot() > 0) {
-				/* No op */
-			}
-			
-			/* only coordinator is using these counters,
-			so no need to protect by lock. */
-			warm_buf_page_cleaner->flush_time += ut_time_monotonic_ms() - tm;
-			warm_buf_page_cleaner->flush_pass++ ;
-
-			/* Wait for all slots to be finished */
-			ulint	n_flushed_lru = 0;
-			ulint	n_flushed_list = 0;
-
-			warm_buf_pc_wait_finished(&n_flushed_lru, &n_flushed_list);
-
-			if (n_flushed_list > 0 || n_flushed_lru > 0) {
-				buf_flush_stats(n_flushed_list, n_flushed_lru);
-			}
-
-			if (ret_sleep == OS_SYNC_TIME_EXCEEDED) {
-				last_pages = n_flushed_list;
-			}
-
-			n_evicted += n_flushed_lru;
-			n_flushed_last += n_flushed_list;
-
-			n_flushed = n_flushed_lru + n_flushed_list;
-			// ib::info()<<"[ky] <<warm 2>> n_flushed_lru: "<<n_flushed_lru<<" n_flushed_list: "<<n_flushed_list;
-			// if (n_flushed_lru) {
-			// 	MONITOR_INC_VALUE_CUMULATIVE(
-			// 		MONITOR_LRU_BATCH_FLUSH_TOTAL_PAGE,
-			// 		MONITOR_LRU_BATCH_FLUSH_COUNT,
-			// 		MONITOR_LRU_BATCH_FLUSH_PAGES,
-			// 		n_flushed_lru);
-			// }
-
-			// if (n_flushed_list) {
-			// 	MONITOR_INC_VALUE_CUMULATIVE(
-			// 		MONITOR_FLUSH_ADAPTIVE_TOTAL_PAGE,
-			// 		MONITOR_FLUSH_ADAPTIVE_COUNT,
-			// 		MONITOR_FLUSH_ADAPTIVE_PAGES,
-			// 		n_flushed_list);
-			// }
-
-		} else if (ret_sleep == OS_SYNC_TIME_EXCEEDED) {
-			/* no activity, slept enough */
-			warm_buf_flush_lists(PCT_IO(100), LSN_MAX, &n_flushed);
-
-			n_flushed_last += n_flushed;
-
-			// if (n_flushed) {
-			// 	MONITOR_INC_VALUE_CUMULATIVE(
-			// 		MONITOR_FLUSH_BACKGROUND_TOTAL_PAGE,
-			// 		MONITOR_FLUSH_BACKGROUND_COUNT,
-			// 		MONITOR_FLUSH_BACKGROUND_PAGES,
-			// 		n_flushed);
-
-			// }
-
-		} else {
-			/* no activity, but woken up by event */
-			n_flushed = 0;
-		}
-
-		// ut_d(buf_flush_page_cleaner_disabled_loop());
-	}
-
-	ut_ad(srv_shutdown_state > 0);
-	if (srv_fast_shutdown == 2
-	    || srv_shutdown_state == SRV_SHUTDOWN_EXIT_THREADS) {
-		/* In very fast shutdown or when innodb failed to start, we
-		simulate a crash of the buffer pool. We are not required to do
-		any flushing. */
-		goto thread_exit;
-	}
-
-	/* In case of normal and slow shutdown the page_cleaner thread
-	must wait for all other activity in the server to die down.
-	Note that we can start flushing the buffer pool as soon as the
-	server enters shutdown phase but we must stay alive long enough
-	to ensure that any work done by the master or purge threads is
-	also flushed.
-	During shutdown we pass through two stages. In the first stage,
-	when SRV_SHUTDOWN_CLEANUP is set other threads like the master
-	and the purge threads may be working as well. We start flushing
-	the buffer pool but can't be sure that no new pages are being
-	dirtied until we enter SRV_SHUTDOWN_FLUSH_PHASE phase. */
-
-	do {
-		warm_buf_pc_request(ULINT_MAX, LSN_MAX);
-
-		while (warm_buf_pc_flush_slot() > 0) {}
-
-		ulint	n_flushed_lru = 0;
-		ulint	n_flushed_list = 0;
-		warm_buf_pc_wait_finished(&n_flushed_lru, &n_flushed_list);
-
-		n_flushed = n_flushed_lru + n_flushed_list;
-
-		/* We sleep only if there are no pages to flush */
+    n_flushed = 0;
+    do {
+        warm_buf_flush_do_batch(buf_pool, BUF_FLUSH_LRU, 1024, 0, &n_flushed);
+         
+        /* We sleep only if there are no pages to flush */
 		if (n_flushed == 0) {
 			os_thread_sleep(100000);
 		}
-	} while (srv_shutdown_state == SRV_SHUTDOWN_CLEANUP);
+    } while (srv_shutdown_state == SRV_SHUTDOWN_CLEANUP);
 
-	/* At this point all threads including the master and the purge
-	thread must have been suspended. */
-	ut_a(srv_get_active_thread_type() == SRV_NONE);
-	ut_a(srv_shutdown_state == SRV_SHUTDOWN_FLUSH_PHASE);
+    warm_buf_flush_wait_LRU_batch_end();
 
-	/* We can now make a final sweep on flushing the buffer pool
-	and exit after we have cleaned the whole buffer pool.
-	It is important that we wait for any running batch that has
-	been triggered by us to finish. Otherwise we can end up
-	considering end of that batch as a finish of our final
-	sweep and we'll come out of the loop leaving behind dirty pages
-	in the flush_list */
-	warm_buf_flush_wait_batch_end(NULL, BUF_FLUSH_LIST);
-	warm_buf_flush_wait_LRU_batch_end();
+    n_flushed = 0;
+    do {
+        warm_buf_flush_do_batch(buf_pool, BUF_FLUSH_LRU, 1024, 0, &n_flushed); /////
+        
+        warm_buf_flush_wait_LRU_batch_end();
+    } while (n_flushed > 0);
 
-	bool	success;
-
-	do {
-		warm_buf_pc_request(ULINT_MAX, LSN_MAX);
-
-		while (warm_buf_pc_flush_slot() > 0) {}
-
-		ulint	n_flushed_lru = 0;
-		ulint	n_flushed_list = 0;
-		success = warm_buf_pc_wait_finished(&n_flushed_lru, &n_flushed_list);
-
-		n_flushed = n_flushed_lru + n_flushed_list;
-
-		warm_buf_flush_wait_batch_end(NULL, BUF_FLUSH_LIST);
-		warm_buf_flush_wait_LRU_batch_end();
-
-	} while (!success || n_flushed > 0);
-
-	/* Some sanity checks */
-	ut_a(srv_get_active_thread_type() == SRV_NONE);
-	ut_a(srv_shutdown_state == SRV_SHUTDOWN_FLUSH_PHASE);
-
-	for (ulint i = 0; i < srv_warm_buf_pool_instances; i++) {
-		buf_pool_t* buf_pool = buf_pool_from_array(srv_buf_pool_instances + i);
-		ut_a(UT_LIST_GET_LEN(buf_pool->flush_list) == 0);
-	}
-
-	/* We have lived our life. Time to die. */
-
+    ut_a(UT_LIST_GET_LEN(buf_pool->flush_list) == 0);
+    
+    ib::info() << "Completed to clean the Warm buffer";
+    
 thread_exit:
-	/* All worker threads are waiting for the event here,
-	and no more access to page_cleaner structure by them.
-	Wakes worker threads up just to make them exit. */
-	warm_buf_page_cleaner->is_running = false;
-	os_event_set(warm_buf_page_cleaner->is_requested);
+    warm_buf_page_cleaner_is_active = false;
+    my_thread_end();
+    os_thread_exit();
+    OS_THREAD_DUMMY_RETURN;
 
-	warm_buf_flush_page_cleaner_close();
-
-	warm_buf_page_cleaner_is_active = false;
-
-	my_thread_end();
-
-	/* We count the number of threads in os_thread_exit(). A created
-	thread should always use that to exit and not use return() to exit. */
-	os_thread_exit();
-
-	OS_THREAD_DUMMY_RETURN;
 
 }
 

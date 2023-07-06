@@ -75,6 +75,75 @@ struct srv_stats_t {
 	typedef ib_counter_t<lint, 1, single_indexer_t> lint_ctr_1_t;
 	typedef ib_counter_t<int64_t, 1, single_indexer_t> int64_ctr_1_t;
 
+	/** Count the amount of data written in total (in bytes) */
+	ulint_ctr_1_t		data_written;
+
+	/** Number of the log write requests done */
+	ulint_ctr_1_t		log_write_requests;
+
+	/** Number of physical writes to the log performed */
+	ulint_ctr_1_t		log_writes;
+
+	/** Amount of data padded for log write ahead */
+	ulint_ctr_1_t		log_padded;
+
+	/** Amount of data written to the log files in bytes */
+	lsn_ctr_1_t		os_log_written;
+
+	/** Number of writes being done to the log files */
+	lint_ctr_1_t		os_log_pending_writes;
+
+	/** We increase this counter, when we don't have enough
+	space in the log buffer and have to flush it */
+	ulint_ctr_1_t		log_waits;
+
+	/** Count the number of times the doublewrite buffer was flushed */
+	ulint_ctr_1_t		dblwr_writes;
+
+	/** Store the number of pages that have been flushed to the
+	doublewrite buffer */
+	ulint_ctr_1_t		dblwr_pages_written;
+
+	/** Store the number of write requests issued */
+	ulint_ctr_1_t		buf_pool_write_requests;
+
+	/** Store the number of times when we had to wait for a free page
+	in the buffer pool. It happens when the buffer pool is full and we
+	need to make a flush, in order to be able to read or create a page. */
+	ulint_ctr_1_t		buf_pool_wait_free;
+
+	/** Count the number of pages that were written from buffer
+	pool to the disk */
+	ulint_ctr_1_t		buf_pool_flushed;
+
+	/** Number of buffer pool reads that led to the reading of
+	a disk page */
+	ulint_ctr_1_t		buf_pool_reads;
+
+	/** Number of data read in total (in bytes) */
+	ulint_ctr_1_t		data_read;
+
+	/** Wait time of database locks */
+	int64_ctr_1_t		n_lock_wait_time;
+
+	/** Number of database lock waits */
+	ulint_ctr_1_t		n_lock_wait_count;
+
+	/** Number of threads currently waiting on database locks */
+	lint_ctr_1_t		n_lock_wait_current_count;
+
+	/** Number of rows read. */
+	ulint_ctr_64_t		n_rows_read;
+
+	/** Number of rows updated */
+	ulint_ctr_64_t		n_rows_updated;
+
+	/** Number of rows deleted */
+	ulint_ctr_64_t		n_rows_deleted;
+
+	/** Number of rows inserted */
+	ulint_ctr_64_t		n_rows_inserted;
+	
 #ifdef UNIV_TPCC_MONITOR
 	/* total tpcc statistics*/
 	ulint_ctr_1_t tpcc_disk_rd;
@@ -140,212 +209,7 @@ struct srv_stats_t {
 	ulint_ctr_1_t tpcc_stk_sp_wr;
 	ulint_ctr_1_t tpcc_wh_sp_wr;
 
-#ifdef UNIV_WARM_BUF_CACHE
-	/* total tpcc statistics*/
-	ulint_ctr_1_t tpcc_warm_disk_rd;
-	ulint_ctr_1_t tpcc_warm_buf_rd;
-	ulint_ctr_1_t tpcc_warm_lru_wr;
-	ulint_ctr_1_t tpcc_warm_sp_wr;
-	ulint_ctr_1_t tpcc_warm_cp_wr;
-	ulint_ctr_1_t tpcc_warm_fpage_list;
-	ulint_ctr_1_t tpcc_warm_lru_scan;
-
-	/* tpcc disk read (buffer miss) */
-	ulint_ctr_1_t tpcc_warm_wh_disk_rd;
-	ulint_ctr_1_t tpcc_warm_dist_disk_rd;
-	ulint_ctr_1_t tpcc_warm_cust_disk_rd;
-	ulint_ctr_1_t tpcc_warm_stk_disk_rd;
-	ulint_ctr_1_t tpcc_warm_itm_disk_rd;
-	ulint_ctr_1_t tpcc_warm_or_disk_rd;
-	ulint_ctr_1_t tpcc_warm_no_disk_rd;
-	ulint_ctr_1_t tpcc_warm_ol_disk_rd;
-	ulint_ctr_1_t tpcc_warm_his_disk_rd;
-
-	/* tpcc buffer read (buffer hit) */
-	ulint_ctr_1_t tpcc_warm_wh_buf_rd;
-	ulint_ctr_1_t tpcc_warm_dist_buf_rd;
-	ulint_ctr_1_t tpcc_warm_cust_buf_rd;
-	ulint_ctr_1_t tpcc_warm_stk_buf_rd;
-	ulint_ctr_1_t tpcc_warm_itm_buf_rd;
-	ulint_ctr_1_t tpcc_warm_or_buf_rd;
-	ulint_ctr_1_t tpcc_warm_no_buf_rd;
-	ulint_ctr_1_t tpcc_warm_ol_buf_rd;
-	ulint_ctr_1_t tpcc_warm_his_buf_rd;
-
-	//tpcc lru flush
-	ulint_ctr_1_t tpcc_warm_cust_lru_wr;
-	ulint_ctr_1_t tpcc_warm_dist_lru_wr;
-	ulint_ctr_1_t tpcc_warm_his_lru_wr;
-	ulint_ctr_1_t tpcc_warm_itm_lru_wr;
-	ulint_ctr_1_t tpcc_warm_no_lru_wr;
-	ulint_ctr_1_t tpcc_warm_ol_lru_wr;
-	ulint_ctr_1_t tpcc_warm_or_lru_wr;
-	ulint_ctr_1_t tpcc_warm_stk_lru_wr;
-	ulint_ctr_1_t tpcc_warm_wh_lru_wr;
-
-	//tpcc checkpoint flush
-	ulint_ctr_1_t tpcc_warm_cust_cp_wr;
-	ulint_ctr_1_t tpcc_warm_dist_cp_wr;
-	ulint_ctr_1_t tpcc_warm_his_cp_wr;
-	ulint_ctr_1_t tpcc_warm_itm_cp_wr;
-	ulint_ctr_1_t tpcc_warm_no_cp_wr;
-	ulint_ctr_1_t tpcc_warm_ol_cp_wr;
-	ulint_ctr_1_t tpcc_warm_or_cp_wr;
-	ulint_ctr_1_t tpcc_warm_stk_cp_wr;
-	ulint_ctr_1_t tpcc_warm_wh_cp_wr;
-
-	//tpcc single page flush
-	ulint_ctr_1_t tpcc_warm_cust_sp_wr;
-	ulint_ctr_1_t tpcc_warm_dist_sp_wr;
-	ulint_ctr_1_t tpcc_warm_his_sp_wr;
-	ulint_ctr_1_t tpcc_warm_itm_sp_wr;
-	ulint_ctr_1_t tpcc_warm_no_sp_wr;
-	ulint_ctr_1_t tpcc_warm_ol_sp_wr;
-	ulint_ctr_1_t tpcc_warm_or_sp_wr;
-	ulint_ctr_1_t tpcc_warm_stk_sp_wr;
-	ulint_ctr_1_t tpcc_warm_wh_sp_wr;
-#endif /*UNIV_WARM_BUF_CACHE*/
 #endif /*UNIV_TPCC_MONITOR*/
-
-	/** Count the amount of data written in total (in bytes) */
-	ulint_ctr_1_t		data_written;
-
-	/** Number of the log write requests done */
-	ulint_ctr_1_t		log_write_requests;
-
-	/** Number of physical writes to the log performed */
-	ulint_ctr_1_t		log_writes;
-
-	/** Amount of data padded for log write ahead */
-	ulint_ctr_1_t		log_padded;
-
-	/** Amount of data written to the log files in bytes */
-	lsn_ctr_1_t		os_log_written;
-
-	/** Number of writes being done to the log files */
-	lint_ctr_1_t		os_log_pending_writes;
-
-	/** We increase this counter, when we don't have enough
-	space in the log buffer and have to flush it */
-	ulint_ctr_1_t		log_waits;
-
-	/** Count the number of times the doublewrite buffer was flushed */
-	ulint_ctr_1_t		dblwr_writes;
-
-	/** Store the number of pages that have been flushed to the
-	doublewrite buffer */
-	ulint_ctr_1_t		dblwr_pages_written;
-
-#ifdef UNIV_WARM_BUF_CACHE
-    /** Store the number of Stock pages that currently been
-      stored in the WARM buffer */
-    ulint_ctr_1_t       warm_buf_pages_stored_stk;
-
-    /** Store the number of Order-Line pages that currently been
-      stored in the WARM buffer */
-    ulint_ctr_1_t       warm_buf_pages_stored_ol;
-
-     /** Store the number of Customer pages that currently been
-      stored in the WARM buffer */
-    ulint_ctr_1_t       warm_buf_pages_stored_cust;
-
-    /** Store the number of Stock pages that been read */
-    ulint_ctr_1_t       warm_buf_pages_read_stk;
-
-    /** Store the number of Order-Line pages that been read */
-    ulint_ctr_1_t       warm_buf_pages_read_ol;
-
-    /** Store the number of Customer pages that been read */
-    ulint_ctr_1_t       warm_buf_pages_read_cust;
-
-    /** Store the number of Stock pages that been written */
-    ulint_ctr_1_t       warm_buf_pages_written_stk;
-
-    /** Store the number of Order-Line pages that been written */
-    ulint_ctr_1_t       warm_buf_pages_written_ol;
-
-    /** Store the number of Customer pages that been written */
-    ulint_ctr_1_t       warm_buf_pages_written_cust;
-
-	/** Store the number of pages that have to move to warm buf */
-	ulint_ctr_1_t       move_to_warm_buf_cnt_stk;
-	ulint_ctr_1_t       move_to_warm_buf_cnt_ol;
-	ulint_ctr_1_t       move_to_warm_buf_cnt_cust;
-
-	/** Store the number of pages that still stay in buffer */
-	ulint_ctr_1_t       stay_in_buf_cnt_stk;
-	ulint_ctr_1_t       stay_in_buf_cnt_ol;
-	ulint_ctr_1_t       stay_in_buf_cnt_cust;
-
-	ulint_ctr_1_t		warm_buf_pages_written_cp;
-	ulint_ctr_1_t		warm_buf_pages_written_lru;
-
-	/***/
-	//normal buffer lru flush
-	ulint_ctr_1_t tpcc_cust_normal_lru;
-	ulint_ctr_1_t tpcc_stk_normal_lru;
-
-	//normal buffer cp flush
-	ulint_ctr_1_t tpcc_cust_normal_cp;
-	ulint_ctr_1_t tpcc_stk_normal_cp;
-
-	//normal buffer sp flush
-	ulint_ctr_1_t tpcc_cust_normal_sp;
-	ulint_ctr_1_t tpcc_stk_normal_sp;
-
-	//warm buffer lru flush
-	ulint_ctr_1_t tpcc_cust_warm_lru;
-	ulint_ctr_1_t tpcc_stk_warm_lru;
-
-	//warm buffer cp flush
-	ulint_ctr_1_t tpcc_cust_warm_cp;
-	ulint_ctr_1_t tpcc_stk_warm_cp;
-
-	//warm buffer sp flush
-	ulint_ctr_1_t tpcc_cust_warm_sp;
-	ulint_ctr_1_t tpcc_stk_warm_sp;
-
-#endif /* UNIV_WARM_BUF_CACHE */
-
-	/** Store the number of write requests issued */
-	ulint_ctr_1_t		buf_pool_write_requests;
-
-	/** Store the number of times when we had to wait for a free page
-	in the buffer pool. It happens when the buffer pool is full and we
-	need to make a flush, in order to be able to read or create a page. */
-	ulint_ctr_1_t		buf_pool_wait_free;
-
-	/** Count the number of pages that were written from buffer
-	pool to the disk */
-	ulint_ctr_1_t		buf_pool_flushed;
-
-	/** Number of buffer pool reads that led to the reading of
-	a disk page */
-	ulint_ctr_1_t		buf_pool_reads;
-
-	/** Number of data read in total (in bytes) */
-	ulint_ctr_1_t		data_read;
-
-	/** Wait time of database locks */
-	int64_ctr_1_t		n_lock_wait_time;
-
-	/** Number of database lock waits */
-	ulint_ctr_1_t		n_lock_wait_count;
-
-	/** Number of threads currently waiting on database locks */
-	lint_ctr_1_t		n_lock_wait_current_count;
-
-	/** Number of rows read. */
-	ulint_ctr_64_t		n_rows_read;
-
-	/** Number of rows updated */
-	ulint_ctr_64_t		n_rows_updated;
-
-	/** Number of rows deleted */
-	ulint_ctr_64_t		n_rows_deleted;
-
-	/** Number of rows inserted */
-	ulint_ctr_64_t		n_rows_inserted;
 };
 
 extern const char*	srv_main_thread_op_info;
@@ -515,10 +379,7 @@ extern my_bool srv_use_warm_buf;
 extern ulint srv_warm_buf_pool_size;
 /** Requested number of WARM buffer pool instances */
 extern ulong srv_warm_buf_pool_instances;
-// /** Wakeup the NVDIMM page cleaner when this % of free pages remaining */
-// extern ulong srv_nvdimm_pc_threshold_pct;
-// /** NVDIMM-aware file resident directory */
-// extern char* srv_nvdimm_home_dir;
+
 #endif /* UNIV_WARM_BUF_CACHE */
 
 /** Requested size in bytes */
@@ -1131,7 +992,6 @@ struct export_var_t{
 #ifdef UNIV_DEBUG
 	ulint innodb_buffer_pool_pages_latched;	/*!< Latched pages */
 #endif /* UNIV_DEBUG */
-
 	ulint innodb_buffer_pool_read_requests;	/*!< buf_pool->stat.n_page_gets */
 	ulint innodb_buffer_pool_reads;		/*!< srv_buf_pool_reads */
 	ulint innodb_buffer_pool_wait_free;	/*!< srv_buf_pool_wait_free */
@@ -1241,72 +1101,6 @@ struct export_var_t{
 	ulint tpcc_or_sp_wr;
 	ulint tpcc_stk_sp_wr;
 	ulint tpcc_wh_sp_wr;
-
-#ifdef UNIV_WARM_BUF_CACHE
-	/* total tpcc statistics*/
-	ulint tpcc_warm_disk_rd;
-	ulint tpcc_warm_buf_rd;
-	ulint tpcc_warm_lru_wr;
-	ulint tpcc_warm_sp_wr;
-	ulint tpcc_warm_cp_wr;
-	ulint tpcc_warm_fpage_list;
-	ulint tpcc_warm_lru_scan;
-	
-	/* tpcc disk read (buffer miss) */
-	ulint tpcc_warm_wh_disk_rd;
-	ulint tpcc_warm_dist_disk_rd;
-	ulint tpcc_warm_cust_disk_rd;
-	ulint tpcc_warm_stk_disk_rd;
-	ulint tpcc_warm_itm_disk_rd;
-	ulint tpcc_warm_or_disk_rd;
-	ulint tpcc_warm_no_disk_rd;
-	ulint tpcc_warm_ol_disk_rd;
-	ulint tpcc_warm_his_disk_rd;
-
-	/* tpcc buffer read (buffer hit) */
-	ulint tpcc_warm_wh_buf_rd;
-	ulint tpcc_warm_dist_buf_rd;
-	ulint tpcc_warm_cust_buf_rd;
-	ulint tpcc_warm_stk_buf_rd;
-	ulint tpcc_warm_itm_buf_rd;
-	ulint tpcc_warm_or_buf_rd;
-	ulint tpcc_warm_no_buf_rd;
-	ulint tpcc_warm_ol_buf_rd;
-	ulint tpcc_warm_his_buf_rd;
-
-	//tpcc lru flush
-	ulint tpcc_warm_cust_lru_wr;
-	ulint tpcc_warm_dist_lru_wr;
-	ulint tpcc_warm_his_lru_wr;
-	ulint tpcc_warm_itm_lru_wr;
-	ulint tpcc_warm_no_lru_wr;
-	ulint tpcc_warm_ol_lru_wr;
-	ulint tpcc_warm_or_lru_wr;
-	ulint tpcc_warm_stk_lru_wr;
-	ulint tpcc_warm_wh_lru_wr;
-
-	//tpcc checkpoint flush
-	ulint tpcc_warm_cust_cp_wr;
-	ulint tpcc_warm_dist_cp_wr;
-	ulint tpcc_warm_his_cp_wr;
-	ulint tpcc_warm_itm_cp_wr;
-	ulint tpcc_warm_no_cp_wr;
-	ulint tpcc_warm_ol_cp_wr;
-	ulint tpcc_warm_or_cp_wr;
-	ulint tpcc_warm_stk_cp_wr;
-	ulint tpcc_warm_wh_cp_wr;
-
-	//tpcc single page flush
-	ulint tpcc_warm_cust_sp_wr;
-	ulint tpcc_warm_dist_sp_wr;
-	ulint tpcc_warm_his_sp_wr;
-	ulint tpcc_warm_itm_sp_wr;
-	ulint tpcc_warm_no_sp_wr;
-	ulint tpcc_warm_ol_sp_wr;
-	ulint tpcc_warm_or_sp_wr;
-	ulint tpcc_warm_stk_sp_wr;
-	ulint tpcc_warm_wh_sp_wr;
-#endif /*UNIV_WARM_BUF_CACHE*/
 
 #endif /*UNIV_TPCC_MONITOR*/
 };

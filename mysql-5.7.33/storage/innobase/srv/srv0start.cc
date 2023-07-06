@@ -1726,8 +1726,6 @@ innobase_start_or_create_for_mysql(void)
 
 	srv_buf_pool_size = buf_pool_size_align(srv_buf_pool_size);
 
-	//[ky:cmt] 만약 srv_n_page_cleaner 개수가 buffer pool instance보다 많다면 최대 buffer instance 개수만큼 제한
-	// n_page_cleaner의 default 개수는 4개!
 	if (srv_n_page_cleaners > srv_buf_pool_instances) {
 		/* limit of page_cleaner parallelizability
 		is number of buffer pool instances. */
@@ -1931,15 +1929,19 @@ innobase_start_or_create_for_mysql(void)
 	while (!buf_page_cleaner_is_active) {
 		os_thread_sleep(10000);
 	}
-	
+	ib::info()<<"buf_pool_page_cleaner_init completed";
+
 #ifdef UNIV_WARM_BUF_CACHE
-	warm_buf_flush_page_cleaner_init();
+	// warm_buf_flush_page_cleaner_init(); // page_cleaner 구조체 내의 변수들 초기화
+
+	// ib::info()<<"warm buf page cleaner init completed";
 	
 	os_thread_create(warm_buf_flush_page_cleaner_coordinator, NULL, NULL);
+	ib::info()<<"buf_pool_page_cleaner_init warm completed";
 
-	for (i = 1; i < warm_buf_srv_n_page_cleaners; ++i) {
-		os_thread_create(warm_buf_flush_page_cleaner_worker, NULL, NULL);
-	}
+	// for (i = 1; i < warm_buf_srv_n_page_cleaners; ++i) {
+	// 	os_thread_create(warm_buf_flush_page_cleaner_worker, NULL, NULL);
+	// }
 
 	/* Make sure page cleaner is active. */
 	while (!warm_buf_page_cleaner_is_active) {
@@ -2805,17 +2807,21 @@ innobase_shutdown_for_mysql(void)
 	the tablespace header(s), and copy all log data to archive.
 	The step 1 is the real InnoDB shutdown. The remaining steps 2 - ...
 	just free data structures after the shutdown. */
-
+	ib::info()<<"innodb shutdown 1";
 	logs_empty_and_mark_files_at_shutdown();
+	ib::info()<<"innodb shutdown 2";
 
 	if (srv_conc_get_active_threads() != 0) {
 		ib::warn() << "Query counter shows "
 			<< srv_conc_get_active_threads() << " queries still"
 			" inside InnoDB at shutdown";
 	}
+	ib::info()<<"innodb shutdown 3";
+
 
 	/* 2. Make all threads created by InnoDB to exit */
 	srv_shutdown_all_bg_threads();
+	ib::info()<<"innodb shutdown 4";
 
 
 	if (srv_monitor_file) {
@@ -2826,32 +2832,47 @@ innobase_shutdown_for_mysql(void)
 			ut_free(srv_monitor_file_name);
 		}
 	}
+	ib::info()<<"innodb shutdown 5";
 
 	if (srv_dict_tmpfile) {
 		fclose(srv_dict_tmpfile);
 		srv_dict_tmpfile = 0;
 	}
+	ib::info()<<"innodb shutdown 6";
 
 	if (srv_misc_tmpfile) {
 		fclose(srv_misc_tmpfile);
 		srv_misc_tmpfile = 0;
 	}
+	ib::info()<<"innodb shutdown 7";
 
 	if (!srv_read_only_mode) {
 		dict_stats_thread_deinit();
 	}
+	ib::info()<<"innodb shutdown 8";
 
 	/* This must be disabled before closing the buffer pool
 	and closing the data dictionary.  */
 	btr_search_disable(true);
+	ib::info()<<"innodb shutdown 9";
 
 	ibuf_close();
+	ib::info()<<"innodb shutdown 10";
 	log_shutdown();
+	ib::info()<<"innodb shutdown 11";
+
 	trx_sys_file_format_close();
+	ib::info()<<"innodb shutdown 12";
+
 	trx_sys_close();
+	ib::info()<<"innodb shutdown 13";
+
 	lock_sys_close();
+	ib::info()<<"innodb shutdown 14";
 
 	trx_pool_close();
+	ib::info()<<"innodb shutdown 15";
+
 
 	/* We don't create these mutexes in RO mode because we don't create
 	the temp files that the cover. */
@@ -2862,27 +2883,48 @@ innobase_shutdown_for_mysql(void)
 	}
 
 	dict_close();
+	ib::info()<<"innodb shutdown 16";
+
 	btr_search_sys_free();
+	ib::info()<<"innodb shutdown 17";
 
 	/* 3. Free all InnoDB's own mutexes and the os_fast_mutexes inside
 	them */
 	os_aio_free();
+	ib::info()<<"innodb shutdown 18";
+
 	que_close();
+	ib::info()<<"innodb shutdown 19";
+
 	row_mysql_close();
+	ib::info()<<"innodb shutdown 20";
+
 	srv_free();
+	ib::info()<<"innodb shutdown 21";
+
 	fil_close();
+	ib::info()<<"innodb shutdown 22";
 
 	/* 4. Free all allocated memory */
 
 	pars_lexer_close();
+	ib::info()<<"innodb shutdown 23";
+
 	log_mem_free();
+	ib::info()<<"innodb shutdown 24";
+
 	buf_pool_free(srv_buf_pool_instances);
+	ib::info()<<"innodb shutdown 25";
 
 	/* 6. Free the thread management resoruces. */
 	os_thread_free();
+	ib::info()<<"innodb shutdown 26";
+
 
 	/* 7. Free the synchronisation infrastructure. */
 	sync_check_close();
+	ib::info()<<"innodb shutdown 27";
+
 
 	if (dict_foreign_err_file) {
 		fclose(dict_foreign_err_file);

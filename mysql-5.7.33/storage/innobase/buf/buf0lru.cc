@@ -1066,7 +1066,7 @@ buf_LRU_free_from_common_LRU_list(
 	for (buf_page_t* bpage = buf_pool->lru_scan_itr.start();
 	     bpage != NULL
 	     && !freed
-	     && (scan_all || scanned < BUF_LRU_SEARCH_SCAN_THRESHOLD); //ky: BUF_LRU_SEARCH_SCAN_THRESHOLD = 100
+	     && (scan_all || scanned < BUF_LRU_SEARCH_SCAN_THRESHOLD);
 	     ++scanned, bpage = buf_pool->lru_scan_itr.get()) {
 
 		buf_page_t*	prev = UT_LIST_GET_PREV(LRU, bpage);
@@ -1080,16 +1080,17 @@ buf_LRU_free_from_common_LRU_list(
 		ut_ad(bpage->in_LRU_list);
 
 		unsigned	accessed = buf_page_is_accessed(bpage);
-
 #ifdef UNIV_TPCC_MONITOR
 		srv_stats.tpcc_lru_scan.inc();
 #endif /*UNIV_TPCC_MONITOR*/
-		if (buf_flush_ready_for_replace(bpage)) {
+
+		if (buf_flush_ready_for_replace(bpage)) { //lru list에 있으면서 clean page
 			mutex_exit(mutex);
 #ifdef UNIV_TPCC_MONITOR
 			bpage->discard_cnt++; // clean page이므로 그냥 discard 
 #endif /*UNIV_TPCC_MONITOR*/
-			freed = buf_LRU_free_page(bpage, true); //ky: LRU list를 돌면서 free page가 될수있는지 이 함수에서 확인
+			freed = buf_LRU_free_page(bpage, true);
+
 		} else {
 			mutex_exit(mutex);
 		}
@@ -1330,15 +1331,15 @@ buf_LRU_get_free_block(
 	bool		started_monitor	= false;
 
 	MONITOR_INC(MONITOR_LRU_GET_FREE_SEARCH);
-loop: //ky: 루프를 돌면서 계속 사용가능한 블럭이 있는지 확인한다.
+loop:
 	buf_pool_mutex_enter(buf_pool);
 
 	buf_LRU_check_size_of_non_data_objects(buf_pool);
 
 	/* If there is a block in the free list, take it */
-	block = buf_LRU_get_free_only(buf_pool); //ky: free list에 사용가능한 블럭이 있는지 확인한다.
+	block = buf_LRU_get_free_only(buf_pool);
 
-	if (block != NULL) { //ky: 만약 블럭이 있으면 free list에서 블럭 가져와서 리턴하면서 이 함수를 벗어남
+	if (block != NULL) {
 
 #ifdef UNIV_TPCC_MONITOR
 	srv_stats.tpcc_fpage_list.inc();
@@ -1367,7 +1368,7 @@ loop: //ky: 루프를 돌면서 계속 사용가능한 블럭이 있는지 확�
 		If we are doing for the first time we'll scan only
 		tail of the LRU list otherwise we scan the whole LRU
 		list. */
-		freed = buf_LRU_scan_and_free_block( //ky: 만약 free list에 free block이 없으면 LRU list를 탐색하여 가져옴
+		freed = buf_LRU_scan_and_free_block(
 			buf_pool, n_iterations > 0);
 
 		if (!freed && n_iterations == 0) {
@@ -1382,7 +1383,7 @@ loop: //ky: 루프를 돌면서 계속 사용가능한 블럭이 있는지 확�
 	buf_pool_mutex_exit(buf_pool);
 
 	if (freed) {
-		goto loop; //ky: 우리는 이제 free block을 가졌기 때문에 다시 loop로 간다
+		goto loop;
 	}
 
 	if (n_iterations > 20
@@ -1419,14 +1420,11 @@ loop: //ky: 루프를 돌면서 계속 사용가능한 블럭이 있는지 확�
 
 	if (!srv_read_only_mode) {
 #ifdef UNIV_WARM_BUF_CACHE
-        if (buf_pool->instance_no < srv_buf_pool_instances) {
-            os_event_set(buf_flush_event);
-		} else{
-			os_event_set(warm_buf_flush_event);
-		} 
-#else
-        os_event_set(buf_flush_event);
+        if (buf_pool->instance_no >= srv_buf_pool_instances) {
+            os_event_set(warm_buf_flush_event);
+		}
 #endif /* UNIV_WARM_BUF_CACHE */
+		os_event_set(buf_flush_event);
 	}
 
 	if (n_iterations > 1) {
@@ -1445,14 +1443,10 @@ loop: //ky: 루프를 돌면서 계속 사용가능한 블럭이 있는지 확�
 	removing the block from page_hash and LRU_list is fairly
 	involved (particularly in case of compressed pages). We
 	can do that in a separate patch sometime in future. */
-	if (!buf_flush_single_page_from_LRU(buf_pool)) {//ky: 만약 clean page도 없고 free block도 없는경우 single page로 감
-		
-		ib::info()<<buf_pool->instance_no<<" single page flush";
+
+	if (!buf_flush_single_page_from_LRU(buf_pool)) {
 		MONITOR_INC(MONITOR_LRU_SINGLE_FLUSH_FAILURE_COUNT);
 		++flush_failures;
-		// if (buf_pool->instance_no == srv_buf_pool_instances){
-		// 	ib::info()<<"single page flush in warm buf";
-		// }
 	}
 
 	srv_stats.buf_pool_wait_free.add(n_iterations, 1);
@@ -1920,7 +1914,7 @@ buf_LRU_free_page(
 		/* This would completely free the block. */
 		/* Do not completely free dirty blocks. */
 
-		if (bpage->oldest_modification) { //ky: 만약 oldest_modification이 0이 아니면 dirty하다는 소리니까 해당 페이지는 재사용될수 없음; 바로 func_exit으로 이동
+		if (bpage->oldest_modification) {
 			goto func_exit;
 		}
 	} else if (bpage->oldest_modification > 0
@@ -2124,7 +2118,7 @@ func_exit:
 		mutex_exit(block_mutex);
 	}
 
-	buf_LRU_block_free_hashed_page((buf_block_t*) bpage); //만약 clean page면, 디스크 플러시 없이 재사용 가능 -> 선택됨
+	buf_LRU_block_free_hashed_page((buf_block_t*) bpage);
 
 	return(true);
 }
@@ -2242,7 +2236,7 @@ buf_LRU_block_remove_hashed(
 	ut_a(buf_page_get_io_fix(bpage) == BUF_IO_NONE);
 	ut_a(bpage->buf_fix_count == 0);
 
-	buf_LRU_remove_block(bpage); //ky: clean page를 LRU list에서 제거
+	buf_LRU_remove_block(bpage);
 
 	buf_pool->freed_page_clock += 1;
 
@@ -2350,7 +2344,7 @@ buf_LRU_block_remove_hashed(
 	ut_d(bpage->in_page_hash = FALSE);
 
 	HASH_DELETE(buf_page_t, hash, buf_pool->page_hash, bpage->id.fold(),
-		    bpage); //ky: hash 정보 삭제
+		    bpage);
 
 	switch (buf_page_get_state(bpage)) {
 	case BUF_BLOCK_ZIP_PAGE:
@@ -2541,6 +2535,33 @@ buf_LRU_old_ratio_update_instance(
 	ratio = old_pct * BUF_LRU_OLD_RATIO_DIV / 100 */
 	return((uint) (ratio * 100 / (double) BUF_LRU_OLD_RATIO_DIV + 0.5));
 }
+
+/**********************************************************************//**
+Updates buf_pool->LRU_old_ratio.
+@return updated old_pct */
+uint
+buf_LRU_old_ratio_update(
+/*=====================*/
+	uint	old_pct,/*!< in: Reserve this percentage of
+			the buffer pool for "old" blocks. */
+	ibool	adjust)	/*!< in: TRUE=adjust the LRU list;
+			FALSE=just assign buf_pool->LRU_old_ratio
+			during the initialization of InnoDB */
+{
+	uint	new_ratio = 0;
+
+	for (ulint i = 0; i < srv_buf_pool_instances; i++) {
+		buf_pool_t*	buf_pool;
+
+		buf_pool = buf_pool_from_array(i);
+
+		new_ratio = buf_LRU_old_ratio_update_instance(
+			buf_pool, old_pct, adjust);
+	}
+
+	return(new_ratio);
+}
+
 #ifdef UNIV_WARM_BUF_CACHE
 /**********************************************************************//**
 Updates buf_pool->LRU_old_ratio.
@@ -2568,31 +2589,6 @@ warm_buf_LRU_old_ratio_update(
 }
 #endif /* UNIV_WARM_BUF_CACHE */
 
-/**********************************************************************//**
-Updates buf_pool->LRU_old_ratio.
-@return updated old_pct */
-uint
-buf_LRU_old_ratio_update(
-/*=====================*/
-	uint	old_pct,/*!< in: Reserve this percentage of
-			the buffer pool for "old" blocks. */
-	ibool	adjust)	/*!< in: TRUE=adjust the LRU list;
-			FALSE=just assign buf_pool->LRU_old_ratio
-			during the initialization of InnoDB */
-{
-	uint	new_ratio = 0;
-
-	for (ulint i = 0; i < srv_buf_pool_instances; i++) {
-		buf_pool_t*	buf_pool;
-
-		buf_pool = buf_pool_from_array(i);
-
-		new_ratio = buf_LRU_old_ratio_update_instance(
-			buf_pool, old_pct, adjust);
-	}
-
-	return(new_ratio);
-}
 
 /********************************************************************//**
 Update the historical stats that we are collecting for LRU eviction

@@ -5689,8 +5689,6 @@ ut0byte.h
 storage/innobase/include/ut0byte.h
 log0log.h
 storage/innobase/include/log0log.h
-buf0types.h
-storage/innobase/include/buf0types.h
 buf0flu.ic
 storage/innobase/include/buf0flu.ic
 

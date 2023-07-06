@@ -735,11 +735,11 @@ buf_dblwr_update(
 	if (!srv_use_doublewrite_buf
 	    || buf_dblwr == NULL
 	    || fsp_is_system_temporary(bpage->id.space())
-#ifdef UNIV_WARM_BUF_CACHE
+#ifdef UNIV_NVDIMM_CACHE
         || bpage->cached_in_warm_buf
         || bpage->moved_to_warm_buf
-#endif /* UNIV_WARM_BUF_CACHE */
-		) {
+#endif /* UNIV_NVDIMM_CACHE */       	
+	) {
 		return;
 	}
 
@@ -1290,7 +1290,7 @@ retry:
 		       (void*) ((buf_block_t*) bpage)->frame,
 		       NULL);
 	}
-	
+
 	/* Now flush the doublewrite buffer data to disk */
 	fil_flush(TRX_SYS_SPACE);
 

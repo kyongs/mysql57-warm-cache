@@ -186,13 +186,15 @@ void
 buf_LRU_make_block_young(
 /*=====================*/
 	buf_page_t*	bpage);	/*!< in: control block */
-	
 /******************************************************************//**
 Moves a block to the end of the LRU list. */
 void
 buf_LRU_make_block_old(
 /*===================*/
 	buf_page_t*	bpage);	/*!< in: control block */
+/**********************************************************************//**
+Updates buf_pool->LRU_old_ratio.
+@return updated old_pct */
 
 #ifdef UNIV_WARM_BUF_CACHE
 /**********************************************************************//**
@@ -208,9 +210,6 @@ warm_buf_LRU_old_ratio_update(
 			during the initialization of InnoDB */
 #endif /* UNIV_WARM_BUF_CACHE */
 
-/**********************************************************************//**
-Updates buf_pool->LRU_old_ratio.
-@return updated old_pct */
 uint
 buf_LRU_old_ratio_update(
 /*=====================*/

@@ -385,10 +385,7 @@ btr_cur_latch_leaves(
 #ifdef UNIV_BTR_DEBUG
 			ut_a(page_is_comp(get_block->frame)
 			     == page_is_comp(page));
-			if (btr_page_get_next(get_block->frame, mtr) != page_get_page_no(page)){
-				ib::info()<<"[ky] btr_page_get_next: "<<btr_page_get_next(get_block->frame, mtr) <<" page_no: "<<page_get_page_no(page);
-			}
-			ut_a(btr_page_get_next(get_block->frame, mtr) //가져오고 싶은 다음 index number와 page no 가 맞지 않으면 오류 발생
+			ut_a(btr_page_get_next(get_block->frame, mtr)
 			     == page_get_page_no(page));
 #endif /* UNIV_BTR_DEBUG */
 		}

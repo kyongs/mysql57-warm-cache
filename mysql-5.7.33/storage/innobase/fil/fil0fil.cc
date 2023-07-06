@@ -6490,8 +6490,7 @@ fil_iterate(
 		os_offset_t	page_off = offset;
 		ulint		n_pages_read = (ulint) n_bytes / iter.page_size;
 
-		for (ulint i = 0; i < n_pages_read; ++i) { 
-
+		for (ulint i = 0; i < n_pages_read; ++i) {
 
 			buf_block_set_file_page(
 				block, page_id_t(space_id, page_no++));
